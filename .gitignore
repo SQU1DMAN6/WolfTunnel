@@ -1,2 +1,5 @@
 doc/
 build/
+*.test
+*.prof
+scripts/

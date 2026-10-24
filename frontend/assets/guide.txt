@@ -1,0 +1,12 @@
+1. Start a node using its existing protected state directory.
+2. Ask its owner for one private invitation over a trusted channel.
+3. In Settings, paste the invitation into the masked field; choose Connect.
+4. Keys and credentials are generated and saved automatically.
+5. Existing installations reconnect with their saved key on startup.
+6. Manual setup supports older nodes: address, owner-verified pin and code.
+7. A pin verifies the node; a new installation still needs owner approval.
+8. Enter an HTTP/HTTPS URL, or preview a search and choose Go again.
+9. Back/Forward show metadata history. Closing a tab cancels its request.
+Ctrl/Cmd+T: new tab; W: close; L: navigation; comma: Settings; Q: quit.
+Diagnostics shows logs and credential details. Scroll for smaller windows.
+Operation and recovery guide: doc/DEVELOPMENT-v0_2.md in the source.
