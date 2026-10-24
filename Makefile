@@ -11,6 +11,10 @@ build: deps
 	$(GO) build -o build/wolfnode ./cmd/wolfnode
 	$(GO) build -o build/wolfclient ./cmd/wolfclient
 
+node:
+	mkdir -p build/
+	CGO_ENABLED=0 $(GO) build -o build/wolfnode ./cmd/wolfnode
+
 clean:
 	rm -rf build/*
 
