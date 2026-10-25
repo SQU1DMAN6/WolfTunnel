@@ -1,11 +1,13 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,9 +16,12 @@ import (
 
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/auth"
+	"wolftunnel/internal/browser"
 	"wolftunnel/internal/fetch"
 	"wolftunnel/internal/identity"
 	"wolftunnel/internal/protocol"
+	v3 "wolftunnel/internal/protocol/v3"
+	"wolftunnel/internal/session"
 	"wolftunnel/internal/storage"
 )
 
@@ -49,6 +54,7 @@ type Server struct {
 	Auth        *auth.Store
 	Fetcher     Fetcher
 	Audit       *audit.Logger
+	Browser     *session.Manager
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
 	clients     map[string]*usage
@@ -99,6 +105,21 @@ func Open(root string) (*Server, error) {
 func (s *Server) TLSConfig() *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{s.Certificate}}
 }
+
+func (s *Server) EnableBrowser(c browser.Config) error {
+	if !c.Valid() {
+		return errors.New("invalid browser configuration")
+	}
+	s.Browser = session.New(c, s.Auth, s.Audit, s.Fingerprint)
+	return nil
+}
+
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // Serve owns the listener. Cancellation closes all accepted sockets and waits
 // for handlers, propagating cancellation into their outbound HTTP requests.
@@ -158,6 +179,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	cancel()
 	<-done
 	wg.Wait()
+	if s.Browser != nil {
+		s.Browser.Close()
+	}
 	s.Audit.Log(audit.Entry{Event: "node_shutdown", Status: "clean"})
 	return serveErr
 }
@@ -225,7 +249,22 @@ func (s *Server) handle(parent context.Context, raw net.Conn) {
 	if c.HandshakeContext(parent) != nil {
 		return
 	}
-	t, e, err := s.read(c)
+	var prefix [12]byte
+	if _, err := io.ReadFull(c, prefix[:]); err != nil {
+		return
+	}
+	reader := io.MultiReader(bytes.NewReader(prefix[:]), c)
+	if string(prefix[:]) == v3.Identifier {
+		if s.Browser == nil {
+			manager := session.New(browser.DefaultConfig(), s.Auth, s.Audit, s.Fingerprint)
+			manager.Handle(parent, c, reader)
+		} else {
+			s.Browser.Handle(parent, c, reader)
+		}
+		return
+	}
+	conn := bufferedConn{Conn: c, r: reader}
+	t, e, err := s.read(conn)
 	if err != nil {
 		return
 	}

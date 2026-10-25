@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"net/url"
 	"strings"
 	"sync"
@@ -21,6 +22,9 @@ type Snapshot struct {
 	Result               protocol.Envelope
 }
 type Tab struct {
+	Frame                                      image.Image
+	FrameSequence                              uint64
+	RemoteFrame                                nodeclient.BrowserFrame
 	ID, Title, Input, Target, State, RequestID string
 	Settings                                   bool
 	Result                                     protocol.Envelope
@@ -29,6 +33,7 @@ type Tab struct {
 	cancel                                     context.CancelFunc
 }
 type completion struct {
+	stream        *nodeclient.Browser
 	kind, tab, id string
 	result        protocol.Envelope
 	err           error
@@ -39,6 +44,12 @@ type completion struct {
 	input, target string
 }
 type Model struct {
+	RemoteFailureCode                               string
+	Remote                                          *nodeclient.Browser
+	MetadataOnly                                    bool
+	opening                                         bool
+	streamCancel                                    context.CancelFunc
+	ViewportWidth, ViewportHeight                   int
 	Client                                          nodeclient.Client
 	Root                                            string
 	Tabs                                            []*Tab
@@ -61,6 +72,7 @@ func NewModel(c nodeclient.Client, root string) *Model {
 	m := &Model{Client: c, Root: root, Connection: "Disconnected", jobs: make(chan completion, 16)}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.workers = make(chan struct{}, 8)
+	m.ViewportWidth, m.ViewportHeight = 1920, 1080
 	m.NewTab()
 	return m
 }
@@ -72,12 +84,19 @@ func (m *Model) NewTab() {
 			requests++
 		}
 	}
-	if requests >= 7 {
-		m.Notice = "Maximum seven request tabs; Settings has a reserved slot"
+	limit := 7
+	if m.Remote != nil {
+		limit = m.Remote.MaxTabs
+	}
+	if requests >= limit {
+		m.Notice = fmt.Sprintf("Maximum %d tabs; Settings has a reserved slot", limit)
 		return
 	}
-	m.Tabs = append(m.Tabs, &Tab{ID: nodeclient.ID(), Title: "New request", State: "Ready", Position: -1})
+	m.Tabs = append(m.Tabs, &Tab{ID: nodeclient.ID(), Title: "New tab", State: "Ready", Position: -1})
 	m.Active = len(m.Tabs) - 1
+	if m.Remote != nil {
+		_ = m.Remote.Select(m.Current().ID)
+	}
 }
 func (m *Model) Settings() {
 	for i, t := range m.Tabs {
@@ -98,6 +117,9 @@ func (m *Model) CloseTab(i int) {
 		return
 	}
 	t := m.Tabs[i]
+	if m.Remote != nil && !t.Settings {
+		_ = m.Remote.CloseTab(t.ID)
+	}
 	if t.cancel != nil {
 		t.cancel()
 	}
@@ -112,9 +134,22 @@ func (m *Model) CloseTab(i int) {
 	if m.Active >= len(m.Tabs) {
 		m.Active = len(m.Tabs) - 1
 	}
+	m.SelectTab(m.Active)
 }
 func (m *Model) Cancel() {
 	t := m.Current()
+	if m.opening && m.streamCancel != nil {
+		m.streamCancel()
+		for _, pending := range m.Tabs {
+			if pending.State == "Loading" {
+				pending.State = "Cancelled"
+			}
+		}
+	}
+	if m.Remote != nil && !t.Settings {
+		_ = m.Remote.Cancel(t.ID)
+		t.State = "Cancelled"
+	}
 	if t.cancel != nil {
 		t.cancel()
 		t.cancel = nil
@@ -124,6 +159,15 @@ func (m *Model) Cancel() {
 }
 func (m *Model) Disconnect() {
 	m.Generation++
+	if m.streamCancel != nil {
+		m.streamCancel()
+		m.streamCancel = nil
+	}
+	if m.Remote != nil {
+		m.Remote.Close()
+		m.Remote = nil
+	}
+	m.opening = false
 	if m.connectionCancel != nil {
 		m.connectionCancel()
 		m.connectionCancel = nil
@@ -157,6 +201,9 @@ func (m *Model) deliver(c completion) {
 	select {
 	case m.jobs <- c:
 	case <-m.ctx.Done():
+		if c.stream != nil {
+			c.stream.Close()
+		}
 	}
 }
 func (m *Model) Configure(c nodeclient.Config) error {
@@ -203,6 +250,10 @@ func (m *Model) ImportInvitation(raw string) (string, error) {
 // diagnostics. It never includes peer-supplied strings or bearer credentials.
 func ConnectionMessage(code string) string {
 	switch code {
+	case "UNSUPPORTED_VERSION":
+		return "This node and client do not support the same protocol. Browser sessions require a v0.5 node."
+	case "PROTOCOL_ERROR":
+		return "The node returned an invalid protocol message. Reconnect or check matching versions."
 	case "INVALID_FINGERPRINT":
 		return "Enter the 64 hexadecimal characters of the owner's SHA-256 pin."
 	case "INVALID_CONFIGURATION":
@@ -211,6 +262,24 @@ func ConnectionMessage(code string) string {
 		return "This destination is blocked by the node's network policy."
 	case "NODE_TIMEOUT":
 		return "The request timed out."
+	case "BROWSER_UNAVAILABLE":
+		return "The node needs a pinned browser and its isolation services. Ask its owner to enable browser sessions."
+	case "BROWSER_START_FAILED":
+		return "The node could not start a sandboxed browser. Ask its owner to check browser dependencies and resource limits."
+	case "BROWSER_CRASHED", "PIXEL_ERROR":
+		return "The remote browser stopped or returned an invalid image. Navigate again to start a fresh session."
+	case "BROWSER_TIMEOUT":
+		return "The remote browser timed out. Cancel or navigate again."
+	case "NAVIGATION_FAILED":
+		return "The remote browser could not load this page."
+	case "VIEWPORT_REJECTED":
+		return "This viewport exceeds the node's configured dimensions. Use a smaller window or ask its owner to adjust limits."
+	case "SESSION_LIMIT", "TAB_LIMIT", "RESOURCE_LIMIT":
+		return "The browser resource limit was reached. Close a tab or session and try again."
+	case "CANCELLED":
+		return "Navigation cancelled."
+	case "SESSION_INVALID":
+		return "The remote browser session is no longer valid. Reconnect to start a fresh session."
 	case "NODE_DNS_ERROR":
 		return "The node could not resolve this destination."
 	case "NODE_RESPONSE_TOO_LARGE":
@@ -310,6 +379,9 @@ func (m *Model) Navigate() error {
 	if err := m.Prepare(); err != nil {
 		return err
 	}
+	if !m.MetadataOnly {
+		return m.navigateRemote()
+	}
 	if !m.reserveWorker() {
 		return errors.New("waiting for cancelled requests to finish")
 	}
@@ -336,6 +408,10 @@ func (m *Model) Navigate() error {
 }
 func (m *Model) History(delta int) {
 	t := m.Current()
+	if !m.MetadataOnly && m.Remote != nil && !t.Settings {
+		_ = m.Remote.History(t.ID, delta)
+		return
+	}
 	if t.Settings {
 		return
 	}
@@ -395,12 +471,41 @@ func (m *Model) Operation(kind, code string) {
 	}()
 }
 func (m *Model) Drain() bool {
-	changed := false
+	changed := m.drainRemote()
 	for {
 		select {
 		case c := <-m.jobs:
 			changed = true
 			if c.generation != m.Generation {
+				if c.stream != nil {
+					c.stream.Close()
+				}
+				continue
+			}
+			if c.kind == "browser_open" {
+				m.opening = false
+				if c.err != nil {
+					m.Notice = ConnectionMessage(nodeclient.ErrorCode(c.err))
+					for _, t := range m.Tabs {
+						if t.State == "Loading" {
+							t.State = "Failed"
+							t.Result.Code = nodeclient.ErrorCode(c.err)
+						}
+					}
+					continue
+				}
+				m.Remote = c.stream
+				for _, t := range m.Tabs {
+					if !t.Settings && t.State == "Loading" && t.Target != "" {
+						if e := m.Remote.Navigate(t.ID, t.Target); e != nil {
+							t.State = "Failed"
+							t.Result.Code = e.Error()
+						}
+					}
+				}
+				if !m.Current().Settings {
+					_ = m.Remote.Select(m.Current().ID)
+				}
 				continue
 			}
 			if c.kind == "fetch" {

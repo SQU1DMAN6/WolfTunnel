@@ -6,7 +6,7 @@
 6. Manual setup supports older nodes: address, owner-verified pin and code.
 7. A pin verifies the node; a new installation still needs owner approval.
 8. Enter an HTTP/HTTPS URL, or preview a search and choose Go again.
-9. Back/Forward show metadata history. Closing a tab cancels its request.
+9. Webpages execute on the node; the client displays pixels. Back/Forward navigate remote history. Closing a tab releases its page.
 Ctrl/Cmd+T: new tab; W: close; L: navigation; comma: Settings; Q: quit.
 Diagnostics shows logs and credential details. Scroll for smaller windows.
-Operation and recovery guide: doc/DEVELOPMENT-v0_2.md in the source.
+Operation and recovery guide: USAGE.md and docs/THREAT_MODEL-v0_5.md in the source.

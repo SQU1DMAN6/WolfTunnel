@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"wolftunnel/internal/audit"
+	"wolftunnel/internal/browser"
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/node"
 	"wolftunnel/internal/storage"
@@ -26,9 +27,12 @@ func main() {
 	}
 	state := flag.String("state-dir", root, "private node state directory")
 	listen := flag.String("listen", ":13300", "TCP listener")
-	issue := flag.Bool("issue-enrolment", false, "create a single-use ten-minute code and exit; stdout is secret")
+	issue := flag.Bool("issue-enrolment", false, "create a single-use 30-day code and exit; stdout is secret")
 	inviteAddress := flag.String("invite-address", "", "with -issue-enrolment, output one setup invitation for host:port (secret)")
 	revoke := flag.String("revoke", "", "revoke a client ID and exit")
+	browserConfig := flag.String("browser-config", "", "private browser JSON configuration")
+	browserBin := flag.String("browser-bin", "", "pinned Chromium/Chromium-based executable")
+	browserHash := flag.String("browser-sha256", "", "expected browser executable SHA-256")
 	flag.Parse()
 	*state, err = filepath.Abs(*state)
 	if err != nil {
@@ -78,12 +82,25 @@ func main() {
 		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	bc := browser.DefaultConfig()
+	if *browserConfig != "" {
+		if err = storage.Read(*browserConfig, &bc); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if *browserBin != "" {
+		bc.Binary = *browserBin
+		bc.SHA256 = *browserHash
+	}
+	if err = s.EnableBrowser(bc); err != nil {
+		log.Fatal(err)
+	}
 	defer stop()
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("WolfTunnel v0.2 node ready on %s\nState: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code.\n", ln.Addr(), *state, s.Fingerprint)
+	fmt.Printf("WolfTunnel v0.5 node ready on %s\nState: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\n", ln.Addr(), *state, s.Fingerprint)
 	if err = s.Serve(ctx, ln); err != nil {
 		log.Fatal(err)
 	}

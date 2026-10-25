@@ -23,14 +23,16 @@ update this table, the Makefile, and rerun all frontend checks.
 Build from the repository root with `make build`. SDL calls stay on the main OS
 thread. Network jobs return completions to the UI thread; configuration changes
 and disconnects invalidate stale completions. Closing a request tab cancels its
-network job. Seven request tabs and one reserved Settings slot bound local state;
+network job. Browser mode negotiates the node tab limit (four by default); legacy metadata
+mode retains seven request tabs and one reserved Settings slot.
 each request tab retains at most fifty metadata history entries in memory.
 
 Use Ctrl/Cmd+T for a new tab, Ctrl/Cmd+W to close it, Ctrl/Cmd+L for navigation,
 Ctrl/Cmd+, for Settings, Ctrl/Cmd+R to reload and Ctrl/Cmd+Q to quit. Text fields
 support Unicode input, arrows, Home/End, selection with Ctrl/Cmd+A, paste,
 Backspace/Delete, and Tab/Shift+Tab focus traversal. Search queries first display
-their resolved URL; a second Go submits it. Back/Forward redisplay metadata only.
+their resolved URL; a second Go submits it. Back/Forward navigate remote page history in browser mode and redisplay local
+metadata in explicit `-metadata` mode.
 
 `go test ./frontend` exercises the SDL event loop with its dummy video driver,
 as well as the UI model and a local TLS node. `make smoke` tests the built client.
@@ -44,7 +46,7 @@ is enabled. Text rasterises at the actual output scale and maps texture pixels
 directly to output pixels; resizing no longer enlarges a fixed 1200×860 canvas.
 Window size, output pixels and scale changes appear in client diagnostics.
 The layout responds to width, scrolls overflowing content and pages tab strips.
-Request summaries show the result and a few metrics; technical fields are
+Legacy request summaries show the result and a few metrics; technical fields are
 collapsed. Settings defaults to one masked invitation, with manual setup and
 diagnostics available separately. Pending approval input survives Apply and
 Settings navigation. Connect applies the visible fields and saves credentials.
@@ -56,8 +58,19 @@ those layouts when combined with `-smoke-test -screenshot /tmp/wolf.bmp`.
 Known UI limits: fields use a simple caret editor rather than a full
 accessibility/text-editing toolkit. IME
 composition overlays, screen readers, touch input and platform packaging need
-additional work. Request views intentionally contain metadata only.
+additional work. Browser viewports contain remotely decoded pixels; only `-metadata` uses request
+summaries. Browser input preserves physical keys separately from committed text.
+The client shares no local clipboard/profile with the page.
 
 SDL references: [window and renderer](https://wiki.libsdl.org/SDL3/SDL_CreateWindowAndRenderer),
 [text input](https://wiki.libsdl.org/SDL3/SDL_StartTextInput),
 [SDL_ttf text](https://wiki.libsdl.org/SDL3_ttf/TTF_RenderText_Blended).
+
+Browser validation: `make browser-smoke BROWSER=/path/to/chromium/engine` runs a
+temporary local TLS node, sandboxed engine, native dummy-driver screenshot and
+binary capture smoke. `make browser-native` captures the actual desktop window.
+Browser screenshot smoke has a 25-second deadline and its test a 40-second parent
+deadline. Source node JPEG and native BMP are saved separately in `build/v0.5/`.
+The viewport texture is clipped below trusted native controls; coordinate mapping
+accounts for letterboxing/DPR 1, and resize notifications coalesce over 100 ms.
+See the [v0.5 report](../docs/IMPLEMENTATION-v0_5-2026_10_25.md).

@@ -1,5 +1,7 @@
 doc/
-build/
+build/wolfclient
+build/wolfnode
 *.test
 *.prof
 scripts/
+tools/

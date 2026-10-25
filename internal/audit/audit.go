@@ -29,10 +29,14 @@ type Entry struct {
 	ID         string `json:"request_id,omitempty"`
 	Status     string `json:"status,omitempty"`
 	ClientID   string `json:"client_id,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
 	Code       string `json:"code,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Component  string `json:"component,omitempty"`
 	Endpoint   string `json:"endpoint,omitempty"`
+	Frames     uint64 `json:"frames,omitempty"`
+	PixelBytes uint64 `json:"pixel_bytes,omitempty"`
+	Dropped    uint64 `json:"dropped_frames,omitempty"`
 }
 
 func New(dir string, retention time.Duration) (*Logger, error) {

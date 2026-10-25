@@ -36,12 +36,22 @@ type Options struct {
 	Width, Height int
 	UIScale       float64
 	SmokeView     string
+	MetadataOnly  bool
+	BrowserSmoke  string
+	SmokeTimeout  time.Duration
 }
 type control struct {
 	x, y, w, h           int
 	label, action, field string
 }
 type ui struct {
+	view                                   viewRect
+	remoteFocus                            bool
+	heldButtons                            int
+	textureTab                             string
+	textureSequence                        uint64
+	desiredW, desiredH                     int
+	resizeAt                               time.Time
 	m                                      *Model
 	controls                               []control
 	focus                                  string
@@ -88,13 +98,28 @@ func Run(o Options) error {
 	u := &ui{m: NewModel(client, o.StateDir), focus: "url", fields: map[string]string{}, dirty: true}
 	defer u.m.Shutdown()
 	u.loadForm()
+	u.m.MetadataOnly = o.MetadataOnly
 	u.manual = client.Config.Fingerprint != "" && client.Config.ClientID == ""
 	if !o.Smoke && client.Config.ClientID != "" && client.Config.Fingerprint != "" {
 		u.enrolling = true
 		u.m.Operation("connect", "")
 	}
 	frame := 0
+	smokeDeadline := time.Now().Add(o.SmokeTimeout)
+	if o.SmokeTimeout == 0 {
+		smokeDeadline = time.Now().Add(25 * time.Second)
+	}
+	browserStage := 0
+	var clicked time.Time
 	for !u.quit {
+		if o.BrowserSmoke != "" && time.Now().After(smokeDeadline) {
+			return fmt.Errorf("BROWSER_SMOKE_TIMEOUT: stage=%d connection=%s state=%s image=%t remote=%t", browserStage, u.m.Connection, u.m.Current().State, u.m.Current().Frame != nil, u.m.Remote != nil)
+		}
+		if !u.resizeAt.IsZero() && time.Now().After(u.resizeAt) {
+			u.m.SetViewport(u.desiredW, u.desiredH)
+			u.resizeAt = time.Time{}
+			u.dirty = true
+		}
 		if o.Smoke {
 			switch frame {
 			case 0:
@@ -142,6 +167,15 @@ func Run(o Options) error {
 			}
 			u.dirty = true
 		}
+		if o.BrowserSmoke != "" {
+			done, err := u.browserSmoke(o, &browserStage, &clicked)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+		}
 		if u.dirty {
 			u.draw()
 			if o.Smoke {
@@ -175,7 +209,7 @@ func Run(o Options) error {
 			return nil
 		}
 		frame++
-		C.SDL_Delay(16)
+		C.SDL_Delay(8)
 	}
 	return nil
 }
@@ -322,6 +356,9 @@ func (u *ui) insert(s string) {
 	u.setValue(string(r))
 }
 func (u *ui) event(e C.WolfEvent) {
+	if u.remoteEvent(e) {
+		return
+	}
 	switch int(e._type) {
 	case 1:
 		u.quit = true
@@ -343,7 +380,7 @@ func (u *ui) event(e C.WolfEvent) {
 			u.insert(C.GoString(e.text))
 		}
 	case 6:
-		u.scroll = max(0, min(u.maxScroll, u.scroll-int(e.y)*44))
+		u.scroll = max(0, min(u.maxScroll, u.scroll-int(e.dy)*44))
 	case 4:
 		k := int(e.key)
 		ctrl := e.ctrl != 0
@@ -460,7 +497,8 @@ func (u *ui) action(a string) {
 	u.menu = ""
 	if strings.HasPrefix(a, "tab:") {
 		i, _ := strconv.Atoi(strings.TrimPrefix(a, "tab:"))
-		u.m.Active = i
+		u.blurRemote()
+		u.m.SelectTab(i)
 		u.scroll = 0
 		u.setFocus("url")
 		return

@@ -1,58 +1,52 @@
 # FtR WolfTunnel
 
-*Current release: Build v0.2*
+Build v0.5 — remote browsing with a native SDL3 client and a separate Go Wolf Node.
 
-*Author: Quan Thai*
+The node runs an isolated Chromium engine, executes webpage JavaScript and sends
+compressed viewport pixels over TLS 1.3. The native client displays those pixels
+and sends browser input over an independent authenticated control connection.
+It never runs a local webpage engine. Existing v2 enrolment and metadata tools
+remain available; audio and file/clipboard transfer remain deferred.
 
-TL;DR: WolfTunnel is a native SDL3 desktop client + a separate Go Wolf Node. The client enrols with a verified node, submits an HTTP GET, and shows real HTTP status + bounded response metadata. It does NOT render websites, execute JS, or play media. Chromium, media streaming, cookies, and uploads remain outside this milestone. It's gonna be done later, don't worry.
-
-
-## Build and test
-
-Install Go 1.27.x, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf **3.2.2** development/runtime libraries. The frontend embeds DejaVu Sans 2.37 and its licence. No third-party Go modules required.
-
-```sh
-make build    # builds wolfnode + wolfclient
-make test     # run tests
-make race     # with race detector
-make fuzz     # four fuzz campaigns
-make smoke    # smoke test
-```
-
-Build just the node (no SDL or cgo):
+Install Go 1.27.x, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
+**3.2.2** development/runtime libraries. The font is embedded DejaVu Sans 2.37.
+There are no third-party Go modules. Browser-enabled nodes currently require
+Linux, unprivileged namespaces, bubblewrap, a working systemd user manager with
+cgroup v2 delegation, and an explicitly pinned Chromium engine. Missing
+isolation dependencies fail closed. The client does not need Chromium.
 
 ```sh
-CGO_ENABLED=0 go build -o build/wolfnode ./cmd/wolfnode
+make build          # both executables
+make node           # node without SDL/cgo
+make test           # unit/legacy TLS tests + go vet
+make race
+make fuzz           # seven bounded fuzz campaigns
+make smoke          # native UI smoke, no browser required
+make browser-smoke BROWSER=/path/to/chromium/engine
+make browser-native BROWSER=/path/to/chromium/engine  # desktop screenshot
 ```
 
-## Usage Information
+`browser-smoke` also starts a temporary local node and built client, renders
+controlled fixtures, tests browser input/pixels/isolation, measures latency and
+closes all session resources. Browser integration tests intentionally skip in
+plain `go test` unless `WOLF_BROWSER_BIN` is provided; the Makefile browser target
+requires it. Screenshots and raw results go under ignored `build/v0.5/`.
 
-Check `USAGE.md` file in the project root for usage details.
+See [USAGE.md](USAGE.md) for node/client setup, [ARCHITECTURE.md](ARCHITECTURE.md)
+for execution boundaries, [Protocol v3](docs/PROTOCOL-v3.md) for the wire format,
+and the [implementation and validation report](docs/IMPLEMENTATION-v0_5-2026_10_25.md)
+for requirement coverage, measurements and remaining release considerations.
 
-## Credentials and privacy
+Each installation has its own Ed25519 key. Existing policy remains: owner-issued
+single-use invitations expire after 30 days; credentials expire after 90 days.
+The certificate pin identifies the node; an invitation authorises a new client.
+Revocation terminates active browser sessions and does not rotate other clients.
+Keys and state use private directories/files; protect backups too.
 
-Each client installation has its own Ed25519 key. Credentials last 30 days; still-valid credentials nearing expiry renew on connect. The existing key can recover lost enrolment metadata without reusing a code. Expired or revoked keys cannot recover or renew.
+TLS protects URLs, inputs and pixels from the client's ISP/network administrator.
+They still see the node address, connection timing and traffic volume. Websites
+see the node's outbound network identity; logins, cookies and fingerprinting can
+still identify a user. The node and its hosting environment are trusted. See the
+[v0.5 threat model](docs/THREAT_MODEL-v0_5.md) for the precise guarantees and limits.
 
-To revoke one installation, use its public Client ID from Settings → Diagnostics:
-
-```sh
-./build/wolfnode -state-dir /tmp/wolftunnel-node -revoke CLIENT_ID
-```
-
-Revocation affects subsequent operations and does not rotate other clients' credentials. It does not retroactively terminate an already-ised fetch; that fetch remains subject to its deadline.
-
-**Forget node** (Settings → Diagnostics): removes local node configuration only. Does NOT revoke the server-side record or regenerate the client identity.
-
-State directories require Unix `0700` permissions and private files use `0600`. Keep protected backups of keys; a missing, expired or insecure node identity fails startup rather than being silently replaced. The node certificate has a one-year lifetime; rotation is deliberate and requires re-ification.
-
-Private client keys are protected files, not OS keychain-backed or encrypted at rest. Linux is the validated platform; other platforms need the protections and packaging described in the development guide.
-
-Audit logs contain security events, request IDs, client IDs, destination hosts, HTTP statuses and durations. They omit paths, queries, fragments, private keys, enrolment codes and bodies. Logs rotate at 1 MiB, retain at most seven days by default, and are additionally capped at 64 files. Deletion does not erase backups or provider snapshots.
-
-Client request history is memory-only; keys and selected settings persist.
-
-TLS 1.3 and explicit pinning protect client-to-node contents. They do not hide the node IP, timing or traffic volume. Websites see the node's outbound IP; the node operator and hosting environment remain trusted. A compromised node or privileged host can observe processed data. This is not a general proxy or a claim of complete anonymity.
-
-No production service, host firewall or provider rule is changed by this project. Controlled deployment requires a separate review of the service account, egress policy, state path, resource limits, recovery and rollback. See the development guide before exposing a node beyond loopback.
-
-_FtR WolfTunnel, Version 0.2, October 2026, Written by Quan Thai_
+Author: Quan Thai. October 2026. See [LICENSE](LICENSE).

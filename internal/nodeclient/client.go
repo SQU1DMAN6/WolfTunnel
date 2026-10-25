@@ -20,6 +20,7 @@ import (
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/identity"
 	"wolftunnel/internal/protocol"
+	v3 "wolftunnel/internal/protocol/v3"
 	"wolftunnel/internal/storage"
 )
 
@@ -70,6 +71,12 @@ func ErrorCode(err error) string {
 	}
 	if errors.Is(err, enrolment.ErrInvitation) {
 		return "INVALID_INVITATION"
+	}
+	if errors.Is(err, protocol.ErrVersion) || errors.Is(err, v3.ErrVersion) {
+		return "UNSUPPORTED_VERSION"
+	}
+	if errors.Is(err, protocol.ErrPayload) || errors.Is(err, protocol.ErrInvalidHeader) || errors.Is(err, v3.ErrFrame) {
+		return "PROTOCOL_ERROR"
 	}
 	var e *Error
 	if errors.As(err, &e) {

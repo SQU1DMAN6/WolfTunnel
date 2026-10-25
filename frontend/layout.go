@@ -74,7 +74,11 @@ func (u *ui) draw() {
 		}
 		u.field(174, 94, w-250, "url", t.Input, false)
 		u.button(w-66, 94, 54, 36, "Go", "go")
-		u.requestDraw()
+		if u.m.MetadataOnly {
+			u.requestDraw()
+		} else {
+			u.viewportDraw()
+		}
 	} else {
 		u.settingsDraw()
 	}
@@ -87,7 +91,19 @@ func (u *ui) draw() {
 		notice = "Security: node identity changed. Verify with the owner before replacing it."
 		color = 0xffb8ba
 	}
-	u.wrapped(20, h-108, w-40, notice, color, 3)
+	if !u.m.MetadataOnly && !u.m.Current().Settings {
+		page := u.m.Current()
+		if u.m.Connection != "Error" && u.m.RemoteFailureCode == "" {
+			if page.Result.Code != "" {
+				notice = ConnectionMessage(page.Result.Code)
+			} else if page.Result.Status != 0 {
+				notice = fmt.Sprintf("%s · HTTP %d", page.State, page.Result.Status)
+			}
+		}
+		u.wrapped(20, h-78, w-40, notice, color, 1)
+	} else {
+		u.wrapped(20, h-108, w-40, notice, color, 3)
+	}
 	rect(0, h-42, w, 42, 0x172331)
 	stateColor := muted
 	if u.m.Connection == "Connected" {
@@ -295,6 +311,9 @@ func (u *ui) settingsDraw() {
 }
 func (u *ui) menuDraw() {
 	items := map[string][][2]string{"File": {{"New tab", "new"}, {"Close tab", "close-active"}, {"Settings", "settings"}, {"Quit", "quit"}}, "View": {{"Reload request", "reload"}, {"Request details", "request-details"}}, "Connection": {{"Connect", "settings"}, {"Disconnect", "disconnect"}, {"Test connection", "ping"}, {"Node details", "settings"}}, "Help": {{"About WolfTunnel", "help:about"}, {"Security", "help:security"}, {"Documentation", "help:docs"}}}
+	if !u.m.MetadataOnly {
+		items["View"] = [][2]string{{"Reload page", "reload"}}
+	}
 	x := 132
 	for i, s := range []string{"File", "View", "Connection", "Help"} {
 		if s == u.menu {
@@ -309,13 +328,13 @@ func (u *ui) menuDraw() {
 func (u *ui) helpDraw() {
 	w, h := u.width, u.height
 	rect(16, 142, w-32, h-270, 0x25374a)
-	headline(32, 160, w-64, "WolfTunnel v0.2", accent)
-	value := "Native request metadata. Webpages and scripts are not rendered. TLS protects the client-to-node channel; the node operator remains trusted. Sites see the node IP and search providers receive queries."
+	headline(32, 160, w-64, "WolfTunnel v0.5", accent)
+	value := "Webpages run on your trusted node. This client displays pixels and sends browser input over verified TLS. Sites see the node IP; logins and fingerprinting can still identify you."
 	if u.help == "docs" {
 		value = strings.TrimSpace(guide)
 	}
 	if u.help == "security" {
-		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. Full details: doc/THREAT_MODEL-v0_2.md."
+		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. TLS hides browsing contents, while network timing and volume remain visible. Details: docs/THREAT_MODEL-v0_5.md."
 	}
 	u.wrapped(32, 211, w-64, value, ink, max(1, (h-390)/22))
 	u.button(w-160, h-176, 122, 34, "Close", "help-close")

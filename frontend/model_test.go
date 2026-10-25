@@ -187,6 +187,7 @@ func TestNativeModelRealClientAndNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewModel(c, root)
+	m.MetadataOnly = true
 	defer m.Shutdown()
 	m.Operation("ping", "")
 	await(t, m, func() bool { return m.Connection == "Connected" })

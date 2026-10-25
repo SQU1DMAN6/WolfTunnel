@@ -1,167 +1,143 @@
-# WolfTunnel v0.2, innit
+# WolfTunnel v0.5 usage
 
-## Setup: get this show on the road
+Build with `make build`. The native client needs SDL3 3.4.18 and SDL3_ttf 3.2.2;
+it does not need a local browser. Browser-enabled nodes currently require Linux,
+bubblewrap, a working unprivileged systemd user manager/cgroup v2, unprivileged
+namespaces and a maintained Chromium engine. Run as an ordinary service user.
 
-### Spin up a relay node
+## Start a local browser node
 
-```sh
-# Make fresh state dir, one-shot enrolment code, bound to loopback
-# This is needed if you want to set up your own relay server.
-./build/wolfnode -state-dir ~/.wolftunnel-node -issue-enrolment \
-  -invite-address 127.0.0.1:13300 > ~/wolftunnel.invite
-```
-
-This pops up:
-- `~/.wolftunnel-node/`
-- Ed25519 identity + self-signed TLS cert
-- Your node's public SHA-256 fingerprint (keep this, you'll verify it)
-- A single-use enrolment code on stdout, saved to `~/wolftunnel.invite`
-
-**Code expires in 30 days. Deal with it.**
-
-Use the code to verify your WolfTunnel client before you connect to a Wolf Node. If you don't do this, you can't use WolfTunnel with a relay. Which means you can't use WolfTunnel at all.
-
-### Run the client
+Choose the actual ELF engine executable, not a shell launcher (for example,
+`/usr/lib/chromium/chromium`; this validation machine has `/opt/brave-bin/brave`).
+Pin a known maintained build from a trusted installation. Obtain its SHA-256 at
+installation time; deliberate upgrades require updating the pin. Do not run as
+root or disable Chromium's sandbox. No host firewall changes are needed for this
+loopback example.
 
 ```sh
-./build/wolfclient -state-dir /tmp/wolftunnel-client
-# Or, if you're looking for everyday use:
-./build/wolfclient -state-dir ~/.wolftunnel-client
-# Or even just:
-./build/wolfclient
+./build/wolfnode -state-dir /tmp/wolf-node-v05 -listen 127.0.0.1:13300 \
+  -browser-bin /path/to/chromium/engine \
+  -browser-sha256 VERIFIED_EXECUTABLE_SHA256
 ```
 
-Default client path is `~/.wolftunnel-client`. Use `-state-dir` to keep things
-separate.
+The node announces its certificate SHA-256. State uses mode 0700 directories and
+0600 files. Use separate node/client directories; normal persistent defaults are
+`~/.wolftunnel` and `~/.wolftunnel-client`. If browser dependencies, hash or
+sandbox verification fail, browser requests fail closed; v2 diagnostics remain
+available. Starting without a browser pin leaves browser sessions unavailable.
 
-## Connecting: it's not rocket science
+The test engine/version/hash is recorded in
+[the validation lock](docs/browser-validation-lock.json). It is evidence of the
+local build tested, not a permanent production update policy.
 
-### GUI way (Settings tab)
+## Enrol and connect
 
-1. **Copy and paste the entire owner-issued invitation (remember the ~/wolftunnel.invite from earlier?) into the masked field**
-   - Click **Connect**
-   - Address, pin, enrolment and storage sort themselves out
-   - Later launches: client reconnects with saved key
-   - Valid creds renew auto on connect (convenient, right?)
-
-2. **Existing setup mode**
-   - Choose **setup**, enter node address/port/pin + fresh code
-   - Click **Connect**
-   - No separate Apply needed; Apply preserves pending codes
-   - Pin identifies the node but doesn't authorise a new install
-   - Optional **Discover**: UNVERIFIED fingerprint, check separately
-
-### CLI way (for the power users)
+In another terminal, issue a private invitation from the same node state:
 
 ```sh
-# Invitation file (import the whole shebang./build/wolfclient -invite-file /tmp/wolftunnel.invite
-
-# Enrolment code file (never a CLI secret)
-./build/wolfclient -enrol-code-file /tmp/wolf-enrol-code
-
-# Discover the fingerprint (UNVERIFIED, obvs)
-./build/wolfclient -discover
-
-# Test connection, just the ping
-./build/wolfclient -test-connection
-
-# Fetch metadata for a URL, print JSON to stdout
-./build/wolfclient -fetch https://example.com/
+umask 077
+./build/wolfnode -state-dir /tmp/wolf-node-v05 -issue-enrolment \
+  -invite-address 127.0.0.1:13300 > /tmp/wolf-v05.invite
+./build/wolfclient -state-dir /tmp/wolf-client-v05 -invite-file /tmp/wolf-v05.invite
+./build/wolfclient -state-dir /tmp/wolf-client-v05
 ```
 
-## Fetching: GET stuff
+Alternatively paste the complete owner-issued invitation into Settings and click
+Connect. It contains address, pin and single-use enrolment authorisation. Obtain
+it over a trusted channel. Manual setup still accepts address, verified pin and
+a fresh code. A correct pin identifies the node; it cannot authorise an unknown
+client. Discover displays an **unverified** pin until independently checked.
 
-### CLI:
+The existing policies remain: invitations expire after 30 days, credentials after
+90 days, and valid credentials nearing expiry renew on connect. Saved independent
+Ed25519 keys reconnect without asking for the invitation again. Expired/revoked
+keys cannot renew or recover. Protect private state and backups.
+
+## Browse
+
+Enter an absolute HTTP/HTTPS URL and Go. The node runs JavaScript and returns
+pixels. Click, move, scroll and type within the webpage viewport. Ctrl/Cmd+L
+focuses the native address bar; Ctrl/Cmd+T/W opens/closes a tab; Ctrl/Cmd+R reloads;
+Ctrl/Cmd+, opens Settings; Ctrl/Cmd+Q quits. Back/Forward now navigate remote page
+history. Stop cancels navigation. Closing the window/disconnecting tears down the
+remote browser. Reconnection starts fresh cookies/storage, not a restored profile.
+
+The window adapts to display bounds and DPI. Its available page area determines
+the logical remote viewport; resize does not restart the browser. Default limits
+are 1920×1200 including the optional 1920×1200 logical preset; the initial default
+is 1920×1080. Four browser tabs share one per-client process scope by default.
+Use `-window-size 1100x700` or `-ui-scale 1.5` for explicit native UI overrides.
+
+The node permits public destinations on ports 80/443. Private, loopback,
+link-local, metadata and prohibited addresses are blocked at actual egress,
+including subresources and redirects. A blocked destination is a policy failure;
+a remote HTTP 404/502 remains a remote response. HTTPS certificates are checked
+by the node's browser. Audio, local file upload/download, clipboard sharing,
+extensions and password-manager/profile integration are unavailable.
+
+## Diagnostics, captures and limits
 
 ```sh
-./build/wolfclient -fetch https://example.com/
+./build/wolfclient -state-dir /tmp/wolf-client-v05 -test-connection
+./build/wolfclient -state-dir /tmp/wolf-client-v05 -fetch https://example.com/
+./build/wolfclient -state-dir /tmp/wolf-client-v05 -metadata
+./build/wolfclient -state-dir /tmp/wolf-client-v05 \
+  -capture https://example.com/ -output /tmp/wolf-page.png -smoke-timeout 25s
 ```
 
-Prints the metadata JSON to stdout.
+`-fetch` and `-metadata` retain legacy v2 behavior. Capture explicitly writes a
+private PNG and exits; it is not operational logging. `-capture-blank` checks a
+1920×1080 session without navigating a website. Smoke/capture operations are
+bounded; `-browser-smoke` is reserved for the controlled fixture used in tests.
 
-### GUI:
+Browser limits can be overlaid using `-browser-config /private/browser.json`.
+It must be a mode-0600 strict JSON file in protected storage; missing fields use
+validated defaults. Durations are integer nanoseconds. For example:
 
-1. Enter an absolute `http://` or `https://` URL
-2. Click **Go**
-3. Other input becomes a URL-encoded Google or DuckDuckGo query
-4. Resolved URL appears before a second Go sends it
-5. Search providers receive these queries
-6. Back/Forward redisplays local metadata history
-7. Closing a tab cancels its request
+```json
+{"max_sessions":2,"max_per_client":1,"max_tabs":4,"fps":15,"quality":90,"refresh":2000000000,"max_frame_bytes":8388608}
+```
 
-**Heads up**: Node only accepts public destinations on HTTP port 80 or HTTPS
-port 443. Loopback, private, link-local, cloud metadata + other prohibited
-addresses are blocked — including in DNS answers and redirects. A local test URL
-like `http://127.0.0.1/` should return `NODE_POLICY_REJECTED`, not an HTTP
-status. A remote `404` or `502` stays a remote HTTP response; the node stays
-connected. Response bodies are bounded, discarded, and never rendered or saved.
+Provide the engine and hash flags as above. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for all resource defaults and allowed hard limits. Increasing viewport/capture
+limits requires measuring memory, bandwidth and latency. Missing isolation is
+never worked around by adding `--no-sandbox` or root privileges.
 
-## Credentials & privacy: keep it sharp
-
-- Each client installation has its own Ed25519 key
-- Creds last 90 days; still-valid creds nearing expiry renew on connect
-- Existing key recovers lost enrolment metadata without reusing a code
-- Expired or revoked keys: cannot recover or renew. Period.
-
-### Revoke a client
+Node/client audit files are under their separate `logs/` directories. Browser
+logs contain fixed categories and public identifiers/counters, never page URLs,
+text, screenshots or raw CDP diagnostics. Startup/sandbox failures have safe
+codes. Check dependencies and the private node logs when browser startup fails.
 
 ```sh
-# From the node side
-./build/wolfnode -state-dir /tmp/wolftunnel-node -revoke CLIENT_ID
+./build/wolfnode -state-dir /tmp/wolf-node-v05 -revoke CLIENT_ID
 ```
 
-Revocation affects subsequent ops. Does not rotate other clients' creds. Does
-not retroactively terminate an already-ised fetch.
+Revocation terminates active browser sessions within the authorisation sweep
+(one second plus bounded teardown), and rejects future operations. Forget node
+removes local configuration only; it does not revoke the installation or rotate
+its key. Recover lost metadata by reconnecting with the existing valid key.
+Deliberate certificate rotation requires fresh protected state and out-of-band
+verification; changed pins are never accepted automatically.
 
-### Forget node locally
-
-- Done via Settings → Diagnostics → Forget node
-- Removes local node config only
-- Does NOT revoke server-side record or regenerate client identity
-
-## Recovery: 'cause stuff happens
-
-### Near-expiry renewal
+## Validation and privacy
 
 ```sh
-./build/wolfclient -state-dir /tmp/wolftunnel-client -renew
+make browser-smoke BROWSER=/path/to/chromium/engine
+make browser-native BROWSER=/path/to/chromium/engine
+python3 tools/smoke_v05.py --browser /path/to/chromium/engine --url https://example.com/
 ```
 
-Connect renews valid creds within 7 days of expiry automatically. Or use the
-`-renew` flag.
+Tests use private temporary node/client state, ephemeral loopback ports and
+per-session scopes. They clean up without touching host firewall/services.
+Controlled fixture routing is injected only by Go tests, never a production
+private-network bypass. `build/v0.5/` holds timed native/node pixel screenshots,
+latency and encoding comparison results. `browser-native` needs a real desktop;
+the other screenshot test can use SDL's dummy software driver.
 
-### Recover lost metadata
-
-If you have the existing installation key:
-
-```sh
-./build/wolfclient -state-dir /tmp/wolftunnel-client -codeFile \
-  /tmp/wolf-enrol-code
-```
-
-Connect proves possession and recovers lost client ID/expiry metadata.
-
-### Expired or revoked
-
-Cannot recover. Revoke and enrol a new installation with a new client state dir
-and fresh code.
-
-**Permissions reminder**: State dirs need 0700, private files need 0600. Keep
-protected backups of keys. A missing/insecure identity fails startup, not
-silently replaced.
-
-## Node certificate rotation
-
-The node cert has a one-year lifetime. Rotation is deliberate and requires:
-1. Stop the service
-2. Retain a protected backup of old state
-3. Create a **new state directory**
-4. Distribute the new public fingerprint through a trusted channel
-5. Clients must explicitly forget the old node and verify the replacement
-
-No silent renewal with a new fingerprint. Ever.
-
-# And that's WolfTunnel.
-
-Have fun.
-Happy browsing.
+The trusted remote node is the browsing egress identity. TLS hides requests,
+input and returned pixels from the client's ISP/network administrator, who still
+sees node address/timing/volume. Account logins, browser fingerprinting and cookies
+can identify users to websites. A node on the same machine/network is useful for
+functional tests and does not establish remote-node anonymity. See the
+[threat model](docs/THREAT_MODEL-v0_5.md) and
+[validation report](docs/IMPLEMENTATION-v0_5-2026_10_25.md).

@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image/png"
 	"os"
 	"strings"
+	"time"
 
 	"wolftunnel/frontend"
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/nodeclient"
+	v3 "wolftunnel/internal/protocol/v3"
 	"wolftunnel/internal/storage"
 )
 
@@ -28,6 +31,12 @@ func run() error {
 	state := flag.String("state-dir", root, "private client state directory")
 	smoke := flag.Bool("smoke-test", false, "run native input/tab smoke checks and exit")
 	smokeView := flag.String("smoke-view", "request", "final smoke-test view: request, settings or manual")
+	browserSmoke := flag.String("browser-smoke", "", "controlled browser fixture URL for timed pixel/input smoke")
+	smokeTimeout := flag.Duration("smoke-timeout", 25*time.Second, "native/browser smoke timeout")
+	metadataOnly := flag.Bool("metadata", false, "legacy v2 metadata-only native UI")
+	captureURL := flag.String("capture", "", "capture remote browser URL to a private PNG and exit")
+	captureBlank := flag.Bool("capture-blank", false, "capture a new blank remote browser without web navigation")
+	outputFile := flag.String("output", "", "private PNG path for remote capture")
 	screenshot := flag.String("screenshot", "", "save a native smoke-test BMP")
 	windowSize := flag.String("window-size", "", "optional window width x height, e.g. 1100x700")
 	uiScale := flag.Float64("ui-scale", 0, "UI scale: 0 for display DPI, or 0.75–3")
@@ -41,7 +50,7 @@ func run() error {
 	target := flag.String("fetch", "", "fetch metadata for an HTTP URL and exit")
 	renew := flag.Bool("renew", false, "renew the current credential and exit")
 	flag.Parse()
-	cli := *discover || *codeFile != "" || *inviteFile != "" || *ping || *target != "" || *renew
+	cli := *discover || *codeFile != "" || *inviteFile != "" || *ping || *target != "" || *renew || *captureURL != "" || *captureBlank
 	if !cli {
 		var width, height int
 		if *windowSize != "" {
@@ -49,7 +58,7 @@ func run() error {
 				return fmt.Errorf("window size must be 520x420 to 8192x8192")
 			}
 		}
-		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView})
+		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout})
 	}
 	c, err := nodeclient.Load(*state)
 	if err != nil {
@@ -156,6 +165,68 @@ func run() error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	if *captureURL != "" || *captureBlank {
+		if *outputFile == "" {
+			return fmt.Errorf("-output is required for capture")
+		}
+		bounded, cancel := context.WithTimeout(ctx, *smokeTimeout)
+		defer cancel()
+		stream, err := c.OpenBrowser(bounded, nodeclient.BrowserOptions{Width: 1920, Height: 1080})
+		if err != nil {
+			return err
+		}
+		defer stream.Close()
+		tab := v3.NewID().String()
+		if *captureBlank {
+			err = stream.Select(tab)
+		} else {
+			err = stream.Navigate(tab, *captureURL)
+		}
+		if err != nil {
+			return err
+		}
+		var latest *nodeclient.BrowserFrame
+		ready := *captureBlank
+		var completed time.Time
+		for {
+			select {
+			case <-bounded.Done():
+				return fmt.Errorf("BROWSER_CAPTURE_TIMEOUT")
+			case <-stream.Done():
+				return fmt.Errorf("BROWSER_CAPTURE_DISCONNECTED")
+			case e := <-stream.Events:
+				if e.Type == v3.Error {
+					return fmt.Errorf("%s", e.Control.Code)
+				}
+				if e.Type == v3.NavigationStatus && e.Control.Code != "" {
+					return fmt.Errorf("%s", e.Control.Code)
+				}
+				if e.Type == v3.NavigationStatus && e.Control.State == "Completed" {
+					ready = true
+					completed = time.Now()
+				}
+			case frame := <-stream.Frames:
+				copy := frame
+				latest = &copy
+			}
+			if latest != nil && ready && (*captureBlank || time.Since(completed) > time.Second) {
+				file, err := os.OpenFile(*outputFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+				if err != nil {
+					return err
+				}
+				err = png.Encode(file, latest.Image)
+				closeErr := file.Close()
+				if err != nil {
+					return err
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+				fmt.Printf("Remote pixels captured: %dx%d; encoded_bytes=%d decode_us=%d\n", latest.Update.Width, latest.Update.Height, len(latest.Update.Data), latest.DecodeUS)
+				return nil
+			}
+		}
 	}
 	return nil
 }
