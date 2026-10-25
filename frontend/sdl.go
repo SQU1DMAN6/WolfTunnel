@@ -30,15 +30,17 @@ var fontData []byte
 var guide string
 
 type Options struct {
-	StateDir      string
-	Smoke         bool
-	Screenshot    string
-	Width, Height int
-	UIScale       float64
-	SmokeView     string
-	MetadataOnly  bool
-	BrowserSmoke  string
-	SmokeTimeout  time.Duration
+	StateDir         string
+	Smoke            bool
+	Screenshot       string
+	Width, Height    int
+	UIScale          float64
+	SmokeView        string
+	MetadataOnly     bool
+	BrowserSmoke     string
+	SmokeTimeout     time.Duration
+	OpenURL          string
+	InteractionSmoke bool
 }
 type control struct {
 	x, y, w, h           int
@@ -100,6 +102,9 @@ func Run(o Options) error {
 	u.loadForm()
 	u.m.MetadataOnly = o.MetadataOnly
 	u.manual = client.Config.Fingerprint != "" && client.Config.ClientID == ""
+	if !o.Smoke && client.Config.ClientID == "" && o.BrowserSmoke == "" {
+		u.action("settings")
+	}
 	if !o.Smoke && client.Config.ClientID != "" && client.Config.Fingerprint != "" {
 		u.enrolling = true
 		u.m.Operation("connect", "")
@@ -112,7 +117,7 @@ func Run(o Options) error {
 	browserStage := 0
 	var clicked time.Time
 	for !u.quit {
-		if o.BrowserSmoke != "" && time.Now().After(smokeDeadline) {
+		if (o.BrowserSmoke != "" || (o.OpenURL != "" && o.Screenshot != "")) && time.Now().After(smokeDeadline) {
 			return fmt.Errorf("BROWSER_SMOKE_TIMEOUT: stage=%d connection=%s state=%s image=%t remote=%t", browserStage, u.m.Connection, u.m.Current().State, u.m.Current().Frame != nil, u.m.Remote != nil)
 		}
 		if !u.resizeAt.IsZero() && time.Now().After(u.resizeAt) {
@@ -162,10 +167,28 @@ func Run(o Options) error {
 					u.fields["code"] = ""
 					u.fields["invite"] = ""
 					u.loadForm()
+					if u.m.Current().Settings {
+						for index, tab := range u.m.Tabs {
+							if !tab.Settings {
+								u.m.SelectTab(index)
+								u.setFocus("url")
+								break
+							}
+						}
+					}
 				}
 				u.enrolling = false
 			}
 			u.dirty = true
+		}
+		if o.OpenURL != "" {
+			done, err := u.openPage(o, &browserStage, &clicked)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
 		}
 		if o.BrowserSmoke != "" {
 			done, err := u.browserSmoke(o, &browserStage, &clicked)
@@ -567,11 +590,26 @@ func (u *ui) action(a string) {
 			u.m.Notice = "Connection setup is already running."
 			break
 		}
-		code := u.fields["code"]
+		code := strings.TrimSpace(u.fields["code"])
+		if strings.HasPrefix(strings.ToLower(code), "wolftunnel://") {
+			u.fields["invite"] = code
+			a = "connect"
+		}
 		if a == "connect" && strings.TrimSpace(u.fields["invite"]) != "" {
-			code, err = u.m.ImportInvitation(u.fields["invite"])
-			if err == nil {
-				u.loadForm()
+			raw := strings.TrimSpace(u.fields["invite"])
+			if len(raw) == 64 && !strings.Contains(raw, ":") {
+				u.manual = true
+				u.fields["code"] = raw
+				code = raw
+				err = u.applyForm()
+				if err == nil && u.m.Client.Config.Fingerprint == "" {
+					err = &nodeclient.Error{Code: "NODE_IDENTITY_UNVERIFIED"}
+				}
+			} else {
+				code, err = u.m.ImportInvitation(raw)
+				if err == nil {
+					u.loadForm()
+				}
 			}
 		} else {
 			err = u.applyForm()
@@ -613,6 +651,7 @@ func (u *ui) action(a string) {
 		u.help = ""
 	}
 	if err != nil {
+		u.m.Client.Report("ui_action_failed", err)
 		code := nodeclient.ErrorCode(err)
 		if code == "NODE_UNREACHABLE" {
 			u.m.Notice = err.Error()
@@ -626,6 +665,11 @@ func (u *ui) applyForm() error {
 	c := u.m.Client.Config
 	c.Host = strings.TrimSpace(u.fields["host"])
 	c.Port, _ = strconv.Atoi(u.fields["port"])
+	host, port, err := nodeclient.NormalizeEndpoint(c.Host, c.Port)
+	if err != nil {
+		return err
+	}
+	c.Host, c.Port = host, port
 	c.Fingerprint = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(u.fields["pin"]), ":", ""))
 	n, _ := strconv.Atoi(u.fields["timeout"])
 	c.Timeout = time.Duration(n) * time.Second

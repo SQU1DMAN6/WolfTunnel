@@ -20,6 +20,7 @@ type Logger struct {
 	retention time.Duration
 	failed    bool
 	prefix    string
+	fixed     string
 }
 
 type Entry struct {
@@ -31,6 +32,7 @@ type Entry struct {
 	ClientID   string `json:"client_id,omitempty"`
 	SessionID  string `json:"session_id,omitempty"`
 	Code       string `json:"code,omitempty"`
+	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Component  string `json:"component,omitempty"`
 	Endpoint   string `json:"endpoint,omitempty"`
@@ -43,7 +45,25 @@ func New(dir string, retention time.Duration) (*Logger, error) {
 	return newLogger(dir, retention, "wolfnode-")
 }
 func NewClient(dir string, retention time.Duration) (*Logger, error) {
-	return newLogger(dir, retention, "wolfclient-")
+	l, err := newLogger(dir, retention, "wolfclient-")
+	if err != nil {
+		return nil, err
+	}
+	l.fixed = "client.log"
+	for _, suffix := range []string{"", ".1", ".2", ".3"} {
+		path := filepath.Join(dir, l.fixed+suffix)
+		if info, e := os.Lstat(path); e == nil && info.Mode().IsRegular() && info.ModTime().Before(time.Now().Add(-l.retention)) {
+			if e = os.Remove(path); e != nil {
+				return nil, e
+			}
+		}
+	}
+	if info, e := os.Lstat(filepath.Join(dir, l.fixed)); e == nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0) {
+		return nil, fmt.Errorf("client.log must be a private regular file")
+	} else if e != nil && !os.IsNotExist(e) {
+		return nil, e
+	}
+	return l, nil
 }
 func newLogger(dir string, retention time.Duration, prefix string) (*Logger, error) {
 	if retention <= 0 {
@@ -134,6 +154,11 @@ func (l *Logger) writeLocked(e Entry) error {
 	if err != nil {
 		return err
 	}
+	if l.fixed != "" {
+		if err = l.writeFixed(e); err != nil {
+			return err
+		}
+	}
 	l.purgeLocked()
 	return nil
 }
@@ -169,4 +194,39 @@ func (l *Logger) purgeLocked() {
 			remaining--
 		}
 	}
+}
+
+// The stable diagnostic path is easy to find; three bounded backups keep it
+// useful without turning connection diagnostics into unlimited persistence.
+func (l *Logger) writeFixed(e Entry) error {
+	path := filepath.Join(l.dir, l.fixed)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return fmt.Errorf("insecure client.log")
+		}
+		if info.Size() >= 1<<20 {
+			for n := 3; n >= 1; n-- {
+				old := path
+				if n > 1 {
+					old = fmt.Sprintf("%s.%d", path, n-1)
+				}
+				target := fmt.Sprintf("%s.%d", path, n)
+				if err = os.Rename(old, target); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	err = json.NewEncoder(f).Encode(e)
+	closeErr := f.Close()
+	if err == nil {
+		return closeErr
+	}
+	return err
 }

@@ -71,3 +71,27 @@ func TestRedactionRotationRetentionAndPermissions(t *testing.T) {
 		t.Fatal("insecure log accepted")
 	}
 }
+
+func TestStableClientLogRotationAndSymlinkRejection(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	l, e := NewClient(dir, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	l.Log(Entry{Event: "connection_failed", Code: "NODE_UNREACHABLE", Error: "Connection refused"})
+	p := filepath.Join(dir, "client.log")
+	data, e := os.ReadFile(p)
+	if e != nil || !strings.Contains(string(data), "connection_failed") || !strings.Contains(string(data), `"time"`) {
+		t.Fatal("stable log missing", e)
+	}
+	os.WriteFile(p, make([]byte, 1<<20), 0600)
+	l.Log(Entry{Event: "rotated"})
+	if _, e = os.Stat(p + ".1"); e != nil {
+		t.Fatal("stable log did not rotate", e)
+	}
+	os.Remove(p)
+	os.Symlink("elsewhere", p)
+	if _, e = NewClient(dir, time.Hour); e == nil {
+		t.Fatal("client log symlink accepted")
+	}
+}

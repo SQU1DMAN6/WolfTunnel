@@ -307,7 +307,7 @@ func ConnectionMessage(code string) string {
 	case "NODE_IDENTITY_CHANGED":
 		return "Node identity changed. Verify with the owner before forgetting or replacing the saved node."
 	case "NODE_IDENTITY_UNVERIFIED":
-		return "Import a trusted invitation or enter the owner's verified certificate pin."
+		return "A code alone cannot verify the node. Enter the owner-verified SHA-256 pin, or paste the complete wolftunnel:// invitation."
 	case "INVALID_INVITATION":
 		return "That invitation is not valid. Paste the complete invitation supplied by the owner."
 	case "NODE_UNREACHABLE":
@@ -485,6 +485,7 @@ func (m *Model) Drain() bool {
 			if c.kind == "browser_open" {
 				m.opening = false
 				if c.err != nil {
+					m.Client.Report("browser_open_failed", c.err)
 					m.Notice = ConnectionMessage(nodeclient.ErrorCode(c.err))
 					for _, t := range m.Tabs {
 						if t.State == "Loading" {
@@ -554,6 +555,7 @@ func (m *Model) Drain() bool {
 				}
 			}
 			if c.err != nil {
+				m.Client.Report("connection_operation_failed", c.err)
 				m.Connection = "Error"
 				m.Verified = false
 				m.ConnectionError = nodeclient.ErrorCode(c.err)

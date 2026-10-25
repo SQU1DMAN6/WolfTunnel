@@ -115,8 +115,29 @@ exit and recovery. The controlled tests inject only a synthetic public upstream
 route; production has no private-network override. An actual built node/client
 pair also completed public HTTPS navigation.
 
-See [the validation report](IMPLEMENTATION-v0_5-2026_10_25.md) for commands and
+See [the validation report](USABILITY-2026_10_25.md) for commands and
 measured limits. WAN delay emulation is not a test of a geographically remote
 node. IPv6 deployment, large-scale concurrent load, adversarial sandbox escape,
 full IME/accessibility behavior, complex-site compatibility, production service
 packaging and independent privacy/security assessment need further validation.
+
+## Managed renderer update
+
+The node now provisions its own version-pinned Chromium-based runtime instead of
+requiring a system browser installation. The compiled manifest fixes the HTTPS
+source, archive digest, executable digest and every asset digest. Installation
+bounds download/unpacked sizes, rejects traversal/symlinks/duplicates, serialises
+concurrent installs, verifies the complete package, and publishes it atomically.
+Cached/bundled corruption is rejected; it does not trigger a system-browser or
+sandbox-disabled fallback. Runtime trust includes the upstream distribution and
+WolfTunnel's reviewed manifest. Updates require a maintained WolfTunnel release.
+The engine remains a separate sandboxed process, with unchanged egress controls.
+Common Linux runtime libraries, host kernel, user systemd/cgroups and fonts remain
+host dependencies. The current managed runtime supports Linux amd64.
+
+The stable client.log mirrors timestamped safe metadata, bounded to 1 MiB plus
+three backups and subject to retention on startup. It includes handled settings,
+connection/enrolment and browser failures, without recording raw invitation
+strings, typed inputs, browsing URLs or arbitrary peer messages. Custom state
+isolates its logs. Diagnostic error detail preserves typed network causes such
+as connection refusal; it is not a raw dump of every input or exception string.

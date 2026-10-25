@@ -43,7 +43,7 @@ session, not separate top-level process scopes. Background pages are frozen
 where supported. Unknown popup targets are closed; CDP operations remain fixed
 server methods. There is no generic CDP endpoint or browser-control TCP port.
 
-The launcher requires an explicitly SHA-256-pinned ELF browser engine, refuses
+The launcher requires an application-managed, SHA-256-pinned ELF browser engine, refuses
 root and group/world-writable engines, and keeps Chromium's sandbox enabled.
 Startup verifies Chromium's namespace and seccomp sandbox through its fixed
 internal sandbox report before accepting user navigation. Browser stderr is
@@ -85,7 +85,7 @@ Validated browser defaults:
 | Sessions: global / per client | 2 / 1 |
 | Tabs per session | 4 |
 | Memory per scope / reserved aggregate | 1024 / 2048 MiB |
-| CPU quota / tasks per scope | 150% / 256 |
+| CPU quota / tasks per scope | 150% / 384 |
 | Profile/tmpfs / shared-memory tmpfs | 192 / 64 MiB |
 | Maximum viewport | 1920×1200, 2,304,000 pixels |
 | Capture rate / JPEG quality | 15 fps / 82 |
@@ -162,6 +162,31 @@ seven-day retention by default, maximum 64 files; protected backups may outlive
 retention. Capture artifacts exist only through explicit capture/test requests.
 
 See [THREAT_MODEL-v0_5.md](docs/THREAT_MODEL-v0_5.md) and the
-[validation report](docs/IMPLEMENTATION-v0_5-2026_10_25.md) for tested boundaries
+[validation report](docs/USABILITY-2026_10_25.md) for tested boundaries
 and remaining limits. Audio, file transfer, clipboard sync, accessibility and
 production packaging need separate work.
+
+## Managed runtime and saved defaults
+
+The usability update provisions a pinned Chrome for Testing runtime under node
+state or reads a verified `renderer/` bundle beside the node executable. It never
+searches for a system Chromium/Brave installation. The build embeds a versioned
+archive/executable/per-file hash manifest; downloads use the fixed HTTPS source,
+size caps, an install lock, traversal/symlink rejection, complete hash validation
+and atomic publication. Existing corrupted runtimes fail closed. This is an
+application-private/bundled engine, not a statically linked Go HTML renderer;
+Linux system libraries, bubblewrap and user systemd/cgroups remain required.
+
+New defaults use XDG data directories (`~/.local/share/wolftunnel/node` and
+`client`). Explicit XDG selection overrides legacy discovery; without it,
+existing default identities remain in place. Node `settings.json` remembers the
+listener/public invitation address and renderer preferences; `browser.json` is
+created automatically. Client defaults and credentials are saved automatically.
+Browser settings start with 384 tasks to accommodate the managed runtime.
+
+Default client logs also have the stable `~/.local/share/wolftunnel/logs/client.log`
+path, rotated at 1 MiB with three backups, alongside existing audit files.
+Handled startup, settings, connection, enrolment and browser failures include
+fixed codes and safe explanations; typed network causes preserve refused/timeout/
+DNS diagnosis without raw input or arbitrary peer error messages. Custom client
+state keeps its logs beneath that state directory. See [SETUP.md](SETUP.md).

@@ -12,18 +12,25 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/browser"
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/node"
+	"wolftunnel/internal/renderer"
 	"wolftunnel/internal/storage"
 )
 
 func main() {
-	root, err := storage.DefaultDir(".wolftunnel")
-	if err != nil {
+	if err := run(); err != nil {
 		log.Fatal(err)
+	}
+}
+func run() error {
+	root, err := storage.StateDir("node")
+	if err != nil {
+		return err
 	}
 	state := flag.String("state-dir", root, "private node state directory")
 	listen := flag.String("listen", ":13300", "TCP listener")
@@ -32,76 +39,172 @@ func main() {
 	revoke := flag.String("revoke", "", "revoke a client ID and exit")
 	browserConfig := flag.String("browser-config", "", "private browser JSON configuration")
 	browserBin := flag.String("browser-bin", "", "pinned Chromium/Chromium-based executable")
+	prepare := flag.Bool("prepare-renderer", false, "provision the managed renderer and exit")
+	rendererDir := flag.String("renderer-dir", "", "managed renderer cache; saved for later node launches")
+	rendererArchive := flag.String("renderer-archive", "", "offline copy of the pinned renderer archive")
+	codeOnly := flag.Bool("code-only", false, "with -issue-enrolment, emit a raw code instead of a complete invitation")
 	browserHash := flag.String("browser-sha256", "", "expected browser executable SHA-256")
 	flag.Parse()
 	*state, err = filepath.Abs(*state)
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+
+	provided := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	settings, fresh, err := node.LoadSettings(*state)
+	if err != nil {
+		return err
+	}
+	if provided["listen"] {
+		settings.Listen = *listen
+	} else {
+		*listen = settings.Listen
+	}
+	if *inviteAddress != "" {
+		settings.PublicAddress = *inviteAddress
+	}
+	if *rendererDir != "" {
+		settings.RendererDir, err = filepath.Abs(*rendererDir)
+		if err != nil {
+			return err
+		}
+	}
+	if *browserConfig != "" {
+		settings.BrowserConfig, err = filepath.Abs(*browserConfig)
+		if err != nil {
+			return err
+		}
+		settings.ManagedRenderer = false
+	}
+	managedBase := settings.RendererDir
+	if managedBase == "" {
+		managedBase = filepath.Join(*state, "renderer")
+	}
+	if *prepare {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		installed, e := renderer.Ensure(ctx, managedBase, *rendererArchive)
+		if e != nil {
+			return e
+		}
+		fmt.Printf("Renderer ready: %s\nExecutable: %s\nSHA-256: %s\n", installed.Version, installed.Binary, installed.SHA256)
+		return nil
 	}
 	if *issue && *revoke != "" {
-		log.Fatal("choose one administrative operation")
+		return fmt.Errorf("choose one administrative operation")
 	}
 	s, err := node.Open(*state)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if *issue {
+		if !*codeOnly && *inviteAddress == "" {
+			*inviteAddress = settings.InvitationAddress()
+		}
 		var invitation enrolment.Invitation
 		if *inviteAddress != "" {
 			host, port, err := net.SplitHostPort(*inviteAddress)
 			if err != nil {
-				log.Fatal("invite address must be host:port")
+				return fmt.Errorf("invite address must be host:port")
 			}
 			invitation.Host = host
 			invitation.Port, err = strconv.Atoi(port)
 			invitation.Fingerprint = s.Fingerprint
 			invitation.Code = strings.Repeat("0", 64)
 			if err != nil || invitation.Validate() != nil {
-				log.Fatal("invalid invitation address")
+				return fmt.Errorf("invalid invitation address")
 			}
 		}
 		code, err := s.Auth.IssueCode()
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		s.Audit.Log(audit.Entry{Event: "enrolment_code_issued"})
-		if *inviteAddress != "" {
+		if err = settings.Save(*state); err != nil {
+			return err
+		}
+		if *inviteAddress != "" && !*codeOnly {
 			invitation.Code = code
 			fmt.Println(invitation.String())
 		} else {
 			fmt.Println(code)
 		}
-		return
+		return nil
 	}
 	if *revoke != "" {
 		if err = s.Auth.Revoke(*revoke); err != nil {
-			log.Fatal(err)
+			return err
 		}
 		s.Audit.Log(audit.Entry{Event: "client_revoked", ClientID: *revoke})
 		fmt.Println("Client revoked")
-		return
+		return nil
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	bc := browser.DefaultConfig()
-	if *browserConfig != "" {
-		if err = storage.Read(*browserConfig, &bc); err != nil {
-			log.Fatal(err)
+	configPath := settings.BrowserConfig
+	if configPath == "" {
+		configPath = filepath.Join(*state, "browser.json")
+	}
+	if err = storage.Read(configPath, &bc); err != nil {
+		if !os.IsNotExist(err) || settings.BrowserConfig != "" {
+			return err
 		}
+		err = nil
+	}
+	if fresh && bc.Binary != "" {
+		settings.ManagedRenderer = false
 	}
 	if *browserBin != "" {
 		bc.Binary = *browserBin
 		bc.SHA256 = *browserHash
+		settings.ManagedRenderer = false
+		settings.BrowserConfig = ""
+		configPath = filepath.Join(*state, "browser.json")
+	}
+	if settings.ManagedRenderer {
+		s.Audit.Log(audit.Entry{Event: "renderer_preparing", Component: "renderer"})
+		fmt.Fprintln(os.Stderr, "Preparing WolfTunnel renderer (first launch may download the pinned runtime)...")
+		installing, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		var installed renderer.Installation
+		var bundled bool
+		if settings.RendererDir == "" && *rendererArchive == "" {
+			installed, bundled, err = renderer.Bundled(installing)
+		}
+		if err == nil && !bundled {
+			installed, err = renderer.Ensure(installing, managedBase, *rendererArchive)
+		}
+		cancel()
+		if err != nil {
+			s.Audit.Log(audit.Entry{Event: "renderer_failed", Component: "renderer", Code: "RENDERER_UNAVAILABLE"})
+			return err
+		}
+		bc.Binary, bc.SHA256 = installed.Binary, installed.SHA256
+		s.Audit.Log(audit.Entry{Event: "renderer_ready", Component: "renderer", Status: installed.Version})
+	}
+	if !bc.Valid() || bc.Binary == "" {
+		return fmt.Errorf("invalid browser configuration")
+	}
+	if configPath == filepath.Join(*state, "browser.json") || settings.ManagedRenderer {
+		if err = storage.Write(configPath, bc); err != nil {
+			return err
+		}
+	}
+	if err = settings.Save(*state); err != nil {
+		return err
 	}
 	if err = s.EnableBrowser(bc); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer stop()
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	fmt.Printf("WolfTunnel v0.5 node ready on %s\nState: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\n", ln.Addr(), *state, s.Fingerprint)
 	if err = s.Serve(ctx, ln); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }

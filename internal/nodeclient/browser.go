@@ -28,7 +28,7 @@ type BrowserFrame struct {
 }
 type BrowserMetrics struct {
 	BrowserUS                                       int64
-	Frames, Bytes, Skipped                          uint64
+	Frames, Bytes, Skipped, InputAcks               uint64
 	DecodeUS, DispatchUS, InputQueueUS, RoundTripUS int64
 }
 type browserPeer struct {
@@ -141,6 +141,7 @@ type transmit struct {
 	at   time.Time
 }
 type Browser struct {
+	report         func(string, error)
 	textSequence   atomic.Uint64
 	ID             v3.ID
 	MaxTabs        int
@@ -162,7 +163,9 @@ type Browser struct {
 	frames         atomic.Uint64
 }
 
-func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (*Browser, error) {
+func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *Browser, result error) {
+	start := time.Now()
+	defer func() { c.reportOperation("browser_open_result", start, result) }()
 	startup, stop := context.WithTimeout(parent, 30*time.Second)
 	defer stop()
 	p, e := c.openPeer(startup, "control", v3.ID{})
@@ -203,7 +206,7 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (*Browser,
 		return nil, v3.ErrFrame
 	}
 	ctx, cancel := context.WithCancel(parent)
-	b := &Browser{ID: p.id, MaxTabs: out.MaxTabs, Frames: make(chan BrowserFrame, 1), Events: make(chan BrowserEvent, 32), ctx: ctx, cancel: cancel, control: p, pixel: pixels, queue: make(chan transmit, 128), wake: make(chan struct{}, 1), pages: make(map[string]bool), pending: make(map[uint64]time.Time), width: out.Width, height: out.Height}
+	b := &Browser{report: c.Report, ID: p.id, MaxTabs: out.MaxTabs, Frames: make(chan BrowserFrame, 1), Events: make(chan BrowserEvent, 32), ctx: ctx, cancel: cancel, control: p, pixel: pixels, queue: make(chan transmit, 128), wake: make(chan struct{}, 1), pages: make(map[string]bool), pending: make(map[uint64]time.Time), width: out.Width, height: out.Height}
 	p.conn.SetDeadline(time.Time{})
 	pixels.conn.SetDeadline(time.Time{})
 	b.wg.Add(3)
@@ -222,6 +225,9 @@ func (b *Browser) Done() <-chan struct{}   { return b.ctx.Done() }
 func (b *Browser) Size() (int, int)        { b.mu.Lock(); defer b.mu.Unlock(); return b.width, b.height }
 func (b *Browser) Metrics() BrowserMetrics { b.mu.Lock(); defer b.mu.Unlock(); return b.metrics }
 func (b *Browser) fail(code string) {
+	if b.report != nil {
+		b.report("browser_stream_failed", &Error{Code: code})
+	}
 	select {
 	case b.Events <- BrowserEvent{Type: v3.Error, Control: v3.Control{Code: v3.SafeCode(code)}}:
 	default:
@@ -392,6 +398,7 @@ func (b *Browser) readControl() {
 				delete(b.pending, c.Ack)
 			}
 			if f.Type == v3.InputAck {
+				b.metrics.InputAcks++
 				b.metrics.DispatchUS = c.DispatchUS
 				b.metrics.BrowserUS = c.BrowserUS
 			}
@@ -413,6 +420,9 @@ func (b *Browser) readControl() {
 		default:
 			b.fail("RESOURCE_LIMIT")
 			return
+		}
+		if c.Code != "" && (f.Type == v3.Error || f.Type == v3.NavigationStatus) && b.report != nil {
+			b.report("browser_remote_error", &Error{Code: c.Code})
 		}
 		if f.Type == v3.Error && (c.Code == "AUTH_FAILED" || c.Code == "SESSION_INVALID" || c.Code == "PROTOCOL_ERROR" || c.Code == "BROWSER_CRASHED" || c.Code == "PIXEL_ERROR") {
 			b.cancel()

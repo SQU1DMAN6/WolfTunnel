@@ -5,3 +5,9 @@ build/wolfnode
 *.prof
 scripts/
 tools/
+build/renderer/
+build/usability/
+build/package-state/
+build/wolfnode-*.tar.gz
+
+build/v0.5/

@@ -359,3 +359,84 @@ func TestSDLDefaultFitsDisplayWorkArea(t *testing.T) {
 		t.Fatal("window metrics were not logged")
 	}
 }
+
+func TestSettingsAcceptInvitationAndBareCodeWithPastedEndpoint(t *testing.T) {
+	s, err := node.Open(filepath.Join(t.TempDir(), "node"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx, ln) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, bare := range []bool{false, true} {
+		root := filepath.Join(t.TempDir(), "client")
+		c, err := nodeclient.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewModel(c, root)
+		defer m.Shutdown()
+		u := &ui{m: m, fields: map[string]string{}}
+		u.loadForm()
+		code, err := s.Auth.IssueCode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		invitation := enrolment.Invitation{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, Fingerprint: s.Fingerprint, Code: code}.String()
+		u.fields["invite"] = invitation
+		if bare {
+			u.fields["invite"] = code
+			u.fields["host"] = ln.Addr().String()
+			u.fields["pin"] = s.Fingerprint
+		}
+		u.action("connect")
+		deadline := time.Now().Add(4 * time.Second)
+		for m.Connection != "Connected" && m.Connection != "Error" && time.Now().Before(deadline) {
+			m.Drain()
+			time.Sleep(5 * time.Millisecond)
+		}
+		if m.Connection != "Connected" || !m.Verified {
+			t.Fatalf("bare=%t failed: %s %s", bare, m.Connection, m.Notice)
+		}
+		again, err := nodeclient.Load(root)
+		if err != nil || again.Config.ClientID == "" {
+			t.Fatal("enrolment was not persisted", err)
+		}
+		logs, err := os.ReadFile(filepath.Join(root, "logs", "client.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(logs), code) || strings.Contains(string(logs), invitation) || !strings.Contains(string(logs), "enrolment_result") {
+			t.Fatal("missing or unsafe diagnostics")
+		}
+	}
+}
+func TestBareCodeCannotSilentlyTrustDiscoveredPin(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "client")
+	c, err := nodeclient.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(c, root)
+	defer m.Shutdown()
+	u := &ui{m: m, fields: map[string]string{}}
+	u.loadForm()
+	u.fields["invite"] = strings.Repeat("a", 64)
+	u.action("connect")
+	if !u.manual || u.fields["code"] == "" || m.busy || m.Client.Config.Fingerprint != "" {
+		t.Fatal("bare code bypassed explicit node identity verification")
+	}
+	if !strings.Contains(m.Notice, "pin") {
+		t.Fatal("missing actionable pin explanation", m.Notice)
+	}
+}

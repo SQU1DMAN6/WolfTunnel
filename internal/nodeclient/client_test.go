@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -264,5 +266,49 @@ func TestUnsignedCancellationRejected(t *testing.T) {
 	}
 	if _, err = session.receive(protocol.HTTPResult, "running"); ErrorCode(err) != "AUTH_FAILED" {
 		t.Fatalf("unsigned CANCEL accepted: %v", err)
+	}
+}
+
+func TestPastedEndpointsAndSafeNetworkDetails(t *testing.T) {
+	for _, raw := range []string{"127.0.0.1:13300", " https://node.example:13300/ ", "[::1]:13300"} {
+		h, p, e := NormalizeEndpoint(raw, 999)
+		if e != nil || h == "" || p != 13300 {
+			t.Fatal(raw, h, p, e)
+		}
+	}
+	for _, raw := range []string{"host:bad", "https://user:secret@node.example/", "https://node.example/private?token=secret"} {
+		if _, _, e := NormalizeEndpoint(raw, 13300); e == nil {
+			t.Fatal("malformed endpoint accepted")
+		}
+	}
+	err := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	if !strings.Contains(FailureDetail(err), "refused") || strings.Contains(FailureDetail(errors.New("secret-token")), "secret-token") {
+		t.Fatal("network diagnostics unsafe or unhelpful")
+	}
+}
+
+func TestConnectionRefusalReachesStableLog(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "client")
+	c, e := Load(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ln, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	c.Config.Port = port
+	c.Config.Fingerprint = strings.Repeat("a", 64)
+	if e = c.Enrol(context.Background(), strings.Repeat("b", 64)); e == nil {
+		t.Fatal("missing connection failure")
+	}
+	data, e := os.ReadFile(filepath.Join(root, "logs", "client.log"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(string(data), "refused") || !strings.Contains(string(data), "enrolment_result") || strings.Contains(string(data), strings.Repeat("b", 64)) {
+		t.Fatal("failure absent or unsafe in stable log", string(data))
 	}
 }

@@ -51,7 +51,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{MaxPerClient: 1, MaxSessions: 2, MaxTabs: 4, MemoryMB: 1024, TotalMemoryMB: 2048, CPUPercent: 150, Tasks: 256, TempMB: 192, MaxWidth: 1920, MaxHeight: 1200, MaxPixels: 1920 * 1200, FPS: 15, Quality: 82, Bandwidth: 4 << 20, MaxFrameBytes: v3.MaxPixel, Refresh: 2 * time.Second, Startup: 20 * time.Second, Navigation: 20 * time.Second, Idle: 2 * time.Minute}
+	return Config{MaxPerClient: 1, MaxSessions: 2, MaxTabs: 4, MemoryMB: 1024, TotalMemoryMB: 2048, CPUPercent: 150, Tasks: 384, TempMB: 192, MaxWidth: 1920, MaxHeight: 1200, MaxPixels: 1920 * 1200, FPS: 15, Quality: 82, Bandwidth: 4 << 20, MaxFrameBytes: v3.MaxPixel, Refresh: 2 * time.Second, Startup: 20 * time.Second, Navigation: 20 * time.Second, Idle: 2 * time.Minute}
 }
 func (c Config) Valid() bool {
 	if c.MaxFrameBytes < 64<<10 || c.MaxFrameBytes > v3.MaxPixel || c.Refresh < 100*time.Millisecond || c.Refresh > 10*time.Second {

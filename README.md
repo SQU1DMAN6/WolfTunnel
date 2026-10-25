@@ -12,7 +12,10 @@ Install Go 1.27.x, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
 **3.2.2** development/runtime libraries. The font is embedded DejaVu Sans 2.37.
 There are no third-party Go modules. Browser-enabled nodes currently require
 Linux, unprivileged namespaces, bubblewrap, a working systemd user manager with
-cgroup v2 delegation, and an explicitly pinned Chromium engine. Missing
+cgroup v2 delegation, and common Linux browser libraries. The node provisions an application-private,
+SHA-256-pinned Chromium-based runtime automatically; no system Chromium package
+or manual browser configuration is required. An offline deployment bundle is
+available with `make node-package`. Missing
 isolation dependencies fail closed. The client does not need Chromium.
 
 ```sh
@@ -22,8 +25,10 @@ make test           # unit/legacy TLS tests + go vet
 make race
 make fuzz           # seven bounded fuzz campaigns
 make smoke          # native UI smoke, no browser required
-make browser-smoke BROWSER=/path/to/chromium/engine
-make browser-native BROWSER=/path/to/chromium/engine  # desktop screenshot
+make browser-smoke  # managed-runtime fixture/browser checks
+make browser-native # desktop screenshot with managed runtime
+make production-smoke # local :13300, public HTTPS and native input
+make node-package   # executable + renderer deployment archive
 ```
 
 `browser-smoke` also starts a temporary local node and built client, renders
@@ -32,9 +37,15 @@ closes all session resources. Browser integration tests intentionally skip in
 plain `go test` unless `WOLF_BROWSER_BIN` is provided; the Makefile browser target
 requires it. Screenshots and raw results go under ignored `build/v0.5/`.
 
-See [USAGE.md](USAGE.md) for node/client setup, [ARCHITECTURE.md](ARCHITECTURE.md)
+Run the node once, issue a complete invitation with `wolfnode -issue-enrolment`,
+and paste it into the client. Node/client preferences persist automatically.
+New state defaults to `~/.local/share/wolftunnel/node/` and `client/`; connection
+errors are timestamped in `~/.local/share/wolftunnel/logs/client.log`. Existing
+default installation keys are preserved.
+
+See [SETUP.md](SETUP.md) for installation, [USAGE.md](USAGE.md) for everyday use, [ARCHITECTURE.md](ARCHITECTURE.md)
 for execution boundaries, [Protocol v3](docs/PROTOCOL-v3.md) for the wire format,
-and the [implementation and validation report](docs/IMPLEMENTATION-v0_5-2026_10_25.md)
+and the [managed-renderer and usability report](docs/USABILITY-2026_10_25.md)
 for requirement coverage, measurements and remaining release considerations.
 
 Each installation has its own Ed25519 key. Existing policy remains: owner-issued

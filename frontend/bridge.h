@@ -20,6 +20,7 @@ int wolf_capture(const char *path);
 void wolf_click(float x,float y);
 void wolf_input(const char *text);
 void wolf_key(int key,int ctrl);
+void wolf_key_event(int key,int down);
 char *wolf_clipboard(void);
 #endif
 int wolf_pixels(const void *data,int width,int height,int pitch);

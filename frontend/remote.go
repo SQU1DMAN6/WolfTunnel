@@ -138,7 +138,11 @@ func (m *Model) SendInput(i v3.Input) error {
 	if m.Remote == nil || m.Current().Settings {
 		return nil
 	}
-	return m.Remote.Input(m.Current().ID, i)
+	err := m.Remote.Input(m.Current().ID, i)
+	if err != nil {
+		m.Client.Report("browser_input_failed", err)
+	}
+	return err
 }
 func (m *Model) SetViewport(w, h int) {
 	if w < 320 {

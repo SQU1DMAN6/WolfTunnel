@@ -62,9 +62,13 @@ type Client struct {
 	Key    ed25519.PrivateKey
 	Log    *audit.Logger
 }
-type Error struct{ Code string }
+type Error struct {
+	Code  string
+	Cause error
+}
 
 func (e *Error) Error() string { return e.Code }
+func (e *Error) Unwrap() error { return e.Cause }
 func ErrorCode(err error) string {
 	if err == nil {
 		return ""
@@ -88,6 +92,10 @@ func ErrorCode(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "NODE_TIMEOUT"
 	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return "NODE_TIMEOUT"
+	}
 	return "NODE_UNREACHABLE"
 }
 func ID() string {
@@ -109,9 +117,14 @@ func Load(root string) (Client, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Client{}, err
 	}
+	host, port, normalizeErr := NormalizeEndpoint(c.Config.Host, c.Config.Port)
+	if normalizeErr != nil {
+		return Client{}, normalizeErr
+	}
+	c.Config.Host, c.Config.Port = host, port
 	if c.Config.ClientID != "" {
 		if _, err := os.Lstat(filepath.Join(root, "client-key.json")); err != nil {
-			return Client{}, errors.New("enrolled client key missing; restore backup or forget and re-enrol")
+			return Client{}, &Error{Code: "CLIENT_KEY_MISSING"}
 		}
 	}
 	key, err := identity.Client(root)
@@ -123,10 +136,17 @@ func Load(root string) (Client, error) {
 		return Client{}, err
 	}
 	if c.Config.ClientID != "" && c.Config.ClientID != identity.ClientID(key.Public().(ed25519.PublicKey)) {
-		return Client{}, errors.New("client identity does not match configuration")
+		return Client{}, &Error{Code: "CLIENT_IDENTITY_MISMATCH"}
 	}
-	c.Log, err = audit.NewClient(filepath.Join(root, "logs"), 7*24*time.Hour)
+	logDir, err := storage.ClientLogDir(root)
 	if err != nil {
+		return Client{}, err
+	}
+	c.Log, err = audit.NewClient(logDir, 7*24*time.Hour)
+	if err != nil {
+		return Client{}, err
+	}
+	if err = c.Save(root); err != nil {
 		return Client{}, err
 	}
 	c.trace("client_ready", "", "ready", time.Now())
@@ -257,7 +277,7 @@ func (c Client) connect(ctx context.Context) (*session, error) {
 	raw, err := d.DialContext(ctx, "tcp", c.Config.Address())
 	if err != nil {
 		c.trace("tls_connect_failed", "", ErrorCode(err), start)
-		return nil, &Error{Code: ErrorCode(err)}
+		return nil, &Error{Code: ErrorCode(err), Cause: err}
 	}
 	conn := raw.(*tls.Conn)
 	if deadline, ok := ctx.Deadline(); ok {
@@ -290,8 +310,24 @@ func (c Client) connect(ctx context.Context) (*session, error) {
 	c.trace("protocol_negotiated", id, "ok", start)
 	return s, nil
 }
-func (c *Client) Enrol(ctx context.Context, code string) error {
+func (c *Client) Enrol(ctx context.Context, code string) (result error) {
 	start := time.Now()
+	defer func() { c.reportOperation("enrolment_result", start, result) }()
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(code)), "wolftunnel://") {
+		inv, err := enrolment.Parse(code)
+		if err != nil {
+			return &Error{Code: "INVALID_INVITATION"}
+		}
+		if c.Config.Fingerprint != "" && c.Config.Fingerprint != inv.Fingerprint {
+			return &Error{Code: "NODE_IDENTITY_CHANGED"}
+		}
+		if c.Config.Host != inv.Host || c.Config.Port != inv.Port {
+			c.Config.ClientID = ""
+			c.Config.Expires = time.Time{}
+		}
+		c.Config.Host, c.Config.Port, c.Config.Fingerprint = inv.Host, inv.Port, inv.Fingerprint
+		code = inv.Code
+	}
 	code = strings.ToLower(strings.TrimSpace(code))
 	if len(c.Key) != ed25519.PrivateKeySize {
 		return &Error{Code: "INVALID_CLIENT_KEY"}

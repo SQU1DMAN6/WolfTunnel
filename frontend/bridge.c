@@ -86,3 +86,5 @@ int wolf_pixels(const void *data,int w,int h,int pitch){
 }
 void wolf_viewport(float x,float y,float w,float h){if(pixels){SDL_FRect dest={x,y,w,h};SDL_RenderTexture(renderer,pixels,NULL,&dest);}}
 void wolf_mouse(int down,int button,float x,float y){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_MOUSE_BUTTON_DOWN:SDL_EVENT_MOUSE_BUTTON_UP;e.button.windowID=SDL_GetWindowID(window);e.button.button=button;SDL_RenderCoordinatesToWindow(renderer,x,y,&e.button.x,&e.button.y);SDL_PushEvent(&e);}
+
+void wolf_key_event(int key,int down){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;e.key.windowID=SDL_GetWindowID(window);e.key.key=key;e.key.scancode=SDL_GetScancodeFromKey(key,NULL);SDL_PushEvent(&e);}

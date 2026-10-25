@@ -73,4 +73,12 @@ Browser screenshot smoke has a 25-second deadline and its test a 40-second paren
 deadline. Source node JPEG and native BMP are saved separately in `build/v0.5/`.
 The viewport texture is clipped below trusted native controls; coordinate mapping
 accounts for letterboxing/DPR 1, and resize notifications coalesce over 100 ms.
-See the [v0.5 report](../docs/IMPLEMENTATION-v0_5-2026_10_25.md).
+See the [v0.5 report](../docs/USABILITY-2026_10_25.md).
+
+New client defaults use `~/.local/share/wolftunnel/client` and the stable diagnostic
+path `~/.local/share/wolftunnel/logs/client.log`. First launch opens Settings;
+full invitations and bare codes are distinguished, and pasted host:port addresses
+are normalised. A bare code requires an independently verified pin. Successful
+connection returns to a page tab. `-open URL` opens a native page after connecting;
+with explicit `-screenshot` it captures and exits under a timeout. The separate
+`-interaction-smoke` flag adds deterministic mouse/physical-key input for testing.

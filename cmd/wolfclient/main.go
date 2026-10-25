@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wolftunnel/frontend"
+	"wolftunnel/internal/audit"
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/nodeclient"
 	v3 "wolftunnel/internal/protocol/v3"
@@ -23,8 +24,8 @@ func main() {
 		os.Exit(1)
 	}
 }
-func run() error {
-	root, err := storage.DefaultDir(".wolftunnel-client")
+func run() (result error) {
+	root, err := storage.StateDir("client")
 	if err != nil {
 		return err
 	}
@@ -37,6 +38,8 @@ func run() error {
 	captureURL := flag.String("capture", "", "capture remote browser URL to a private PNG and exit")
 	captureBlank := flag.Bool("capture-blank", false, "capture a new blank remote browser without web navigation")
 	outputFile := flag.String("output", "", "private PNG path for remote capture")
+	openURL := flag.String("open", "", "open a URL in the native client after connecting")
+	interactionSmoke := flag.Bool("interaction-smoke", false, "with -open and -screenshot, verify remote native mouse/key input and exit")
 	screenshot := flag.String("screenshot", "", "save a native smoke-test BMP")
 	windowSize := flag.String("window-size", "", "optional window width x height, e.g. 1100x700")
 	uiScale := flag.Float64("ui-scale", 0, "UI scale: 0 for display DPI, or 0.75–3")
@@ -49,7 +52,36 @@ func run() error {
 	ping := flag.Bool("test-connection", false, "test authenticated connectivity and exit")
 	target := flag.String("fetch", "", "fetch metadata for an HTTP URL and exit")
 	renew := flag.Bool("renew", false, "renew the current credential and exit")
-	flag.Parse()
+
+	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
+	parseErr := flag.CommandLine.Parse(os.Args[1:])
+	if parseErr == flag.ErrHelp {
+		return nil
+	}
+	logDir, logErr := storage.ClientLogDir(*state)
+	if logErr != nil {
+		return logErr
+	}
+	diagnosticLog, logErr := audit.NewClient(logDir, 7*24*time.Hour)
+	if logErr != nil {
+		return logErr
+	}
+	stopNative, captureErr := audit.CaptureNativeStderr(diagnosticLog)
+	if captureErr == nil {
+		defer stopNative()
+	} else {
+		nodeclient.ReportTo(diagnosticLog, "native_capture_failed", captureErr, "")
+	}
+	if parseErr != nil {
+		nodeclient.ReportTo(diagnosticLog, "client_arguments_failed", &nodeclient.Error{Code: "INVALID_CONFIGURATION"}, "")
+		return &nodeclient.Error{Code: "INVALID_CONFIGURATION"}
+	}
+	defer func() {
+		if result != nil {
+			nodeclient.ReportTo(diagnosticLog, "client_exit_error", result, "")
+		}
+	}()
+
 	cli := *discover || *codeFile != "" || *inviteFile != "" || *ping || *target != "" || *renew || *captureURL != "" || *captureBlank
 	if !cli {
 		var width, height int
@@ -58,7 +90,7 @@ func run() error {
 				return fmt.Errorf("window size must be 520x420 to 8192x8192")
 			}
 		}
-		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout})
+		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout, OpenURL: *openURL, InteractionSmoke: *interactionSmoke})
 	}
 	c, err := nodeclient.Load(*state)
 	if err != nil {
@@ -73,9 +105,13 @@ func run() error {
 	if *pin != "" {
 		p := strings.ToLower(strings.ReplaceAll(*pin, ":", ""))
 		if c.Config.Fingerprint != "" && c.Config.Fingerprint != p {
-			return fmt.Errorf("NODE_IDENTITY_CHANGED: use a separate state directory for an explicitly verified replacement node")
+			return &nodeclient.Error{Code: "NODE_IDENTITY_CHANGED"}
 		}
 		c.Config.Fingerprint = p
+	}
+	c.Config.Host, c.Config.Port, err = nodeclient.NormalizeEndpoint(c.Config.Host, c.Config.Port)
+	if err != nil {
+		return err
 	}
 	if err = c.Config.Validate(); err != nil {
 		return err
@@ -227,6 +263,9 @@ func run() error {
 				return nil
 			}
 		}
+	}
+	if *openURL != "" {
+		return frontend.Run(frontend.Options{StateDir: *state, OpenURL: *openURL, Screenshot: *screenshot, InteractionSmoke: *interactionSmoke, SmokeTimeout: *smokeTimeout})
 	}
 	return nil
 }

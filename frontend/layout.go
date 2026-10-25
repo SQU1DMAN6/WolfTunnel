@@ -9,6 +9,7 @@ import (
 
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/nodeclient"
+	"wolftunnel/internal/storage"
 )
 
 // All positions use current window content coordinates. No fixed-size render
@@ -243,7 +244,7 @@ func (u *ui) settingsDraw() {
 	headline(left, y, width, "Node connection", ink)
 	y += 46
 	if !u.manual {
-		text(left, y, width, "Invitation from the node owner", muted)
+		text(left, y, width, "Invitation or enrolment code from the node owner", muted)
 		y += 27
 		u.field(left, y, width, "invite", u.fields["invite"], true)
 		y += 51
@@ -292,7 +293,7 @@ func (u *ui) settingsDraw() {
 	if u.m.Client.Config.Details {
 		text(left, y, width, "Diagnostics", accent)
 		y += 30
-		for _, line := range []string{"Identity: " + u.m.Client.Config.Fingerprint, "Discovered (unverified): " + u.m.Discovered, "Client ID: " + u.m.Client.Config.ClientID, "Last error: " + u.m.ConnectionError, "Client logs: " + filepath.Join(u.m.Root, "logs"), fmt.Sprintf("Window: %d × %d · Pixels: %d × %d · Scale: %.2f", w, h, u.pixelWidth, u.pixelHeight, u.dpi)} {
+		for _, line := range []string{"Identity: " + u.m.Client.Config.Fingerprint, "Discovered (unverified): " + u.m.Discovered, "Client ID: " + u.m.Client.Config.ClientID, "Last error: " + u.m.ConnectionError, "Client log: " + u.clientLogPath(), fmt.Sprintf("Window: %d × %d · Pixels: %d × %d · Scale: %.2f", w, h, u.pixelWidth, u.pixelHeight, u.dpi)} {
 			y += u.wrapped(left, y, width, line, muted, 2) + 8
 		}
 		text(left, y, 175, "Request timeout (s)", muted)
@@ -338,4 +339,12 @@ func (u *ui) helpDraw() {
 	}
 	u.wrapped(32, 211, w-64, value, ink, max(1, (h-390)/22))
 	u.button(w-160, h-176, 122, 34, "Close", "help-close")
+}
+
+func (u *ui) clientLogPath() string {
+	dir, err := storage.ClientLogDir(u.m.Root)
+	if err != nil {
+		return "unavailable"
+	}
+	return filepath.Join(dir, "client.log")
 }
