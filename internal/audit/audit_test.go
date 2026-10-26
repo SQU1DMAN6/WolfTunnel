@@ -95,3 +95,36 @@ func TestStableClientLogRotationAndSymlinkRejection(t *testing.T) {
 		t.Fatal("client log symlink accepted")
 	}
 }
+
+func TestStableNodeLogIncludesDiagnosticAndRejectsSymlinks(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	logger, e := New(dir, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := filepath.Join(dir, "node.log")
+	logger.Log(Entry{Event: "browser_start_failed", Code: "BROWSER_NAMESPACE_DENIED", Stage: "cdp_version", Error: "Namespace denied", Remediation: "Check host profiles", Evidence: "Namespace creation failed", ExitStatus: "exit code 1"})
+	data, e := os.ReadFile(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, text := range []string{"browser_start_failed", "cdp_version", "remediation", "evidence", "exit_status", "\"time\""} {
+		if !strings.Contains(string(data), text) {
+			t.Fatal("missing diagnostic field", text)
+		}
+	}
+	info, _ := os.Stat(p)
+	if info.Mode().Perm() != 0600 {
+		t.Fatal("node.log permissions")
+	}
+	os.WriteFile(p, make([]byte, 1<<20), 0600)
+	logger.Log(Entry{Event: "rotate"})
+	if _, e = os.Stat(p + ".1"); e != nil {
+		t.Fatal(e)
+	}
+	os.Remove(p)
+	os.Symlink("elsewhere", p)
+	if _, e = New(dir, time.Hour); e == nil {
+		t.Fatal("node log symlink accepted")
+	}
+}

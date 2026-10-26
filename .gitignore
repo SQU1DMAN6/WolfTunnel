@@ -1,5 +1,6 @@
 doc/*
 !doc/ARM64-2026_10_26.md
+!doc/BROWSER-DIAGNOSTICS-2026_10_26.md
 build/wolfclient
 build/wolfnode
 *.test
@@ -13,3 +14,4 @@ build/wolfnode-*.tar.gz
 
 build/v0.5/
 build/arm64/
+build/diagnostics/

@@ -198,3 +198,18 @@ Handled startup, settings, connection, enrolment and browser failures include
 fixed codes and safe explanations; typed network causes preserve refused/timeout/
 DNS diagnosis without raw input or arbitrary peer error messages. Custom client
 state keeps its logs beneath that state directory. See [SETUP.md](SETUP.md).
+
+Browser startup records typed failure categories, the last checkpoint, safe
+evidence, exit status, transient scope and matching mitigation. A stable private
+`node/logs/node.log` shares the existing rotation/retention policy with client
+diagnostics. Native stderr is bounded during startup, classified, then cleared
+before page access; arbitrary stderr, URLs, inputs and credentials are never
+copied into these diagnostics. Numeric cgroup OOM/task events are queried before
+scope cleanup. A signal alone is not treated as proof of an OOM kill.
+
+Updated peers negotiate `browser-start-diagnostics` through the node's advertised
+capability and the client's signed authentication payload. Older clients retain
+the generic wire error while node logs keep the specific cause. The native UI
+and client log use the same fixed advice catalog. `wolfnode -diagnose-browser`
+exercises the production launcher/sandbox and a private blank JPEG without
+requiring a client or binding the public service port.

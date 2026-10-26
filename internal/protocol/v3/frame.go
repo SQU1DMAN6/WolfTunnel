@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+	"wolftunnel/internal/browserdiag"
 )
 
 const Identifier = "WolfTunnelv3"
@@ -219,7 +220,7 @@ type Control struct {
 	Ack          uint64   `json:"ack,omitempty"`
 }
 
-var fields = map[byte]string{Hello: "versions", NodeIdentity: "version fingerprint capabilities", Authenticate: "client_id role signature", AuthResult: "client_id", SessionCreate: "width height quality fps", SessionCreated: "width height max_tabs", PixelAttach: "", SessionClose: "", SessionStatus: "tab state code", Navigate: "tab target", NavigationStatus: "tab state code status title target", InputEvent: "tab input", InputAck: "ack dispatch_us browser_us", ViewportSet: "width height", ViewportAck: "width height", FrameRefresh: "", Cancel: "tab", Ping: "", Pong: "ack", Error: "tab code", TabCreate: "tab", TabSelect: "tab", TabClose: "tab", History: "tab direction"}
+var fields = map[byte]string{Hello: "versions", NodeIdentity: "version fingerprint capabilities", Authenticate: "client_id role signature capabilities", AuthResult: "client_id", SessionCreate: "width height quality fps", SessionCreated: "width height max_tabs", PixelAttach: "", SessionClose: "", SessionStatus: "tab state code", Navigate: "tab target", NavigationStatus: "tab state code status title target", InputEvent: "tab input", InputAck: "ack dispatch_us browser_us", ViewportSet: "width height", ViewportAck: "width height", FrameRefresh: "", Cancel: "tab", Ping: "", Pong: "ack", Error: "tab code", TabCreate: "tab", TabSelect: "tab", TabClose: "tab", History: "tab direction"}
 
 func Encode(c Control) []byte { b, _ := json.Marshal(c); return b }
 func Decode(f Frame) (Control, error) {
@@ -273,6 +274,9 @@ func Decode(f Frame) (Control, error) {
 		if len(c.ClientID) != 64 || len(c.Signature) != ed25519.SignatureSize || (c.Role != "control" && c.Role != "pixel") {
 			return Control{}, ErrFrame
 		}
+		if len(c.Capabilities) > 1 || (len(c.Capabilities) == 1 && c.Capabilities[0] != "browser-start-diagnostics") {
+			return Control{}, ErrFrame
+		}
 	case AuthResult:
 		if len(c.ClientID) != 64 {
 			return Control{}, ErrFrame
@@ -309,6 +313,9 @@ func Sign(key ed25519.PrivateKey, binding []byte, id ID, c Control) Control {
 	return c
 }
 func SafeCode(code string) string {
+	if _, ok := browserdiag.Lookup(code); ok {
+		return code
+	}
 	switch code {
 	case "", "PROTOCOL_ERROR", "UNSUPPORTED_VERSION", "AUTH_FAILED", "SESSION_INVALID", "SESSION_LIMIT", "TAB_LIMIT", "BROWSER_UNAVAILABLE", "BROWSER_START_FAILED", "BROWSER_TIMEOUT", "BROWSER_CRASHED", "NAVIGATION_FAILED", "NODE_POLICY_REJECTED", "NODE_DNS_ERROR", "NODE_UNREACHABLE", "VIEWPORT_REJECTED", "PIXEL_ERROR", "RESOURCE_LIMIT", "CANCELLED", "INTERNAL_ERROR":
 		return code

@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 	"time"
+	"wolftunnel/internal/browser"
 	v3 "wolftunnel/internal/protocol/v3"
 )
 
@@ -59,5 +60,33 @@ func TestBlockedPixelSocketDoesNotSerializeControl(t *testing.T) {
 	case <-blocked:
 	case <-time.After(time.Second):
 		t.Fatal("pixel disconnect did not release writer")
+	}
+}
+
+func TestSpecificStartupCodesRequireNegotiation(t *testing.T) {
+	for _, negotiated := range []bool{false, true} {
+		reader, writer := net.Pipe()
+		manager := New(browser.DefaultConfig(), nil, nil, "")
+		peer := &wire{c: writer, startupDiagnostics: negotiated}
+		done := make(chan struct{})
+		go func() { defer close(done); manager.fail(peer, v3.ID{}, "", "BROWSER_NAMESPACE_DENIED") }()
+		frame, err := v3.Read(reader, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := v3.Decode(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := "BROWSER_START_FAILED"
+		if negotiated {
+			expected = "BROWSER_NAMESPACE_DENIED"
+		}
+		if body.Code != expected {
+			t.Fatalf("negotiated=%t got %s", negotiated, body.Code)
+		}
+		<-done
+		reader.Close()
+		writer.Close()
 	}
 }

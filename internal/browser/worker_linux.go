@@ -3,6 +3,8 @@
 package browser
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -20,10 +22,12 @@ func init() {
 }
 func worker(binary string) int {
 	if syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{Cur: 0, Max: 0}) != nil {
+		fmt.Fprintln(os.Stderr, "WOLF_WORKER_CORE_LIMIT_FAILED")
 		return 73
 	}
 	ln, e := net.Listen("tcp", "127.0.0.1:18080")
 	if e != nil {
+		fmt.Fprintln(os.Stderr, "WOLF_WORKER_PROXY_LISTEN_FAILED")
 		return 71
 	}
 	defer ln.Close()
@@ -64,6 +68,24 @@ func worker(binary string) int {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
 	if e = cmd.Run(); e != nil {
+		marker := "WOLF_WORKER_ENGINE_EXIT"
+		switch {
+		case errors.Is(e, syscall.ENOENT):
+			marker = "WOLF_WORKER_ENGINE_NOT_FOUND"
+		case errors.Is(e, syscall.EACCES):
+			marker = "WOLF_WORKER_ENGINE_EXEC_DENIED"
+		case errors.Is(e, syscall.ENOEXEC):
+			marker = "WOLF_WORKER_ENGINE_EXEC_FORMAT"
+		}
+		fmt.Fprintln(os.Stderr, marker)
+		var exit *exec.ExitError
+		if errors.As(e, &exit) {
+			if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				fmt.Fprintf(os.Stderr, "WOLF_WORKER_ENGINE_SIGNAL=%d\n", status.Signal())
+			} else {
+				fmt.Fprintf(os.Stderr, "WOLF_WORKER_ENGINE_EXIT_CODE=%d\n", exit.ExitCode())
+			}
+		}
 		return 72
 	}
 	return 0

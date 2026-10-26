@@ -440,3 +440,11 @@ func TestBareCodeCannotSilentlyTrustDiscoveredPin(t *testing.T) {
 		t.Fatal("missing actionable pin explanation", m.Notice)
 	}
 }
+
+func TestBrowserStartupMessagesHaveSpecificRemedies(t *testing.T) {
+	for code, expected := range map[string]string{"BROWSER_NAMESPACE_DENIED": "AppArmor", "BROWSER_USER_SESSION_UNAVAILABLE": "SSH", "BROWSER_DEPENDENCY_MISSING": "library", "BROWSER_TASK_LIMIT": "TasksMax", "BROWSER_START_FAILED": "diagnose-browser"} {
+		if !strings.Contains(ConnectionMessage(code), expected) {
+			t.Fatalf("missing remedy for %s: %s", code, ConnectionMessage(code))
+		}
+	}
+}

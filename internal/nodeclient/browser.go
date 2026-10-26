@@ -117,7 +117,14 @@ func (c Client) openPeer(ctx context.Context, role string, id v3.ID) (*browserPe
 		return nil, e
 	}
 	p.id = id
-	proof := v3.Sign(c.Key, binding, id, v3.Control{ClientID: c.Config.ClientID, Role: role})
+	credentials := v3.Control{ClientID: c.Config.ClientID, Role: role}
+	for _, capability := range out.Capabilities {
+		if capability == "browser-start-diagnostics" {
+			credentials.Capabilities = []string{capability}
+			break
+		}
+	}
+	proof := v3.Sign(c.Key, binding, id, credentials)
 	if _, e = p.send(v3.Authenticate, proof); e != nil {
 		return nil, e
 	}
@@ -166,7 +173,9 @@ type Browser struct {
 func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *Browser, result error) {
 	start := time.Now()
 	defer func() { c.reportOperation("browser_open_result", start, result) }()
-	startup, stop := context.WithTimeout(parent, 30*time.Second)
+	// Node startup is configurable up to 60 seconds. Leave room for the result
+	// and pixel authentication so a slow node's diagnosis is not lost as EOF.
+	startup, stop := context.WithTimeout(parent, 90*time.Second)
 	defer stop()
 	p, e := c.openPeer(startup, "control", v3.ID{})
 	if e != nil {

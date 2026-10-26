@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 	"wolftunnel/internal/audit"
+	"wolftunnel/internal/browserdiag"
 )
 
 // FailureDetail reports safe useful causes; it never copies untrusted peer text,
@@ -14,6 +15,9 @@ import (
 func FailureDetail(err error) string {
 	if err == nil {
 		return ""
+	}
+	if advice := browserdiag.Message(ErrorCode(err)); advice != "" {
+		return advice
 	}
 	switch {
 	case errors.Is(err, syscall.ECONNREFUSED):

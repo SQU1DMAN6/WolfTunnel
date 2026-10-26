@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +81,7 @@ type Browser struct {
 	cdp           *cdp
 	scope         string
 	done          chan struct{}
+	exitError     error
 	ctx           context.Context
 	cancel        context.CancelFunc
 	once          sync.Once
@@ -93,54 +96,107 @@ type Browser struct {
 }
 
 func Start(parent context.Context, c Config, p *browsernet.Proxy) (*Browser, error) {
-	if !c.Valid() || c.Binary == "" || os.Geteuid() == 0 {
-		return nil, errors.New("BROWSER_UNAVAILABLE")
-	}
-	for _, tool := range []string{"bwrap", "systemd-run", "systemctl"} {
-		if _, e := exec.LookPath(tool); e != nil {
-			return nil, errors.New("BROWSER_UNAVAILABLE")
+	return StartObserved(parent, c, p, nil)
+}
+
+// StartObserved records checkpoints before any web content is loaded. A failure
+// is classified once and returned with fixed advice, not raw stderr or CDP text.
+func StartObserved(parent context.Context, c Config, p *browsernet.Proxy, observe func(StartupDiagnostic)) (opened *Browser, result error) {
+	started := time.Now()
+	stage := "configuration"
+	scope := ""
+	checkpoint := func(next string) {
+		stage = next
+		if observe != nil {
+			observe(StartupDiagnostic{Stage: stage, Status: "checking", Scope: scope, DurationMS: time.Since(started).Milliseconds()})
 		}
 	}
+	defer func() {
+		if result != nil {
+			var failure *startupError
+			if !errors.As(result, &failure) {
+				result = StartFailure(stage, "BROWSER_START_FAILED", "Unexpected startup failure; raw error omitted.")
+			}
+			d := Diagnosis(result)
+			d.Scope = scope
+			d.DurationMS = time.Since(started).Milliseconds()
+			if observe != nil {
+				observe(d)
+			}
+		} else if observe != nil {
+			observe(StartupDiagnostic{Stage: "ready", Status: "ready", Scope: scope, DurationMS: time.Since(started).Milliseconds()})
+		}
+	}()
+	checkpoint("configuration")
+	if !c.Valid() || c.Binary == "" {
+		return nil, StartFailure(stage, "BROWSER_CONFIG_INVALID", "")
+	}
+	if observe != nil {
+		observe(hostEnvironment())
+	}
+	checkpoint("node_account")
+	if os.Geteuid() == 0 {
+		return nil, StartFailure(stage, "BROWSER_ROOT_FORBIDDEN", "")
+	}
+	checkpoint("isolation_tools")
+	for _, tool := range []string{"bwrap", "systemd-run", "systemctl"} {
+		if _, e := exec.LookPath(tool); e != nil {
+			return nil, StartFailure(stage, "BROWSER_TOOL_MISSING", "Unavailable tool: "+tool)
+		}
+	}
+	checkpoint("renderer_integrity")
 	file, e := os.Open(c.Binary)
 	if e != nil {
-		return nil, errors.New("BROWSER_UNAVAILABLE")
+		return nil, StartFailure(stage, "BROWSER_BINARY_INVALID", "Renderer is not a readable, private ELF executable.")
 	}
 	// Pin the engine, not a shell wrapper whose unchanged digest could launch a
 	// different executable after a distribution update.
 	info, statErr := file.Stat()
 	var signature [4]byte
 	_, signatureErr := io.ReadFull(file, signature[:])
-	if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || signatureErr != nil || signature != [4]byte{0x7f, 'E', 'L', 'F'} {
+	if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 || signatureErr != nil || signature != [4]byte{0x7f, 'E', 'L', 'F'} {
 		file.Close()
-		return nil, errors.New("BROWSER_UNAVAILABLE")
+		return nil, StartFailure(stage, "BROWSER_BINARY_INVALID", "Renderer is not a readable, private ELF executable.")
+	}
+	engine, elfError := elf.NewFile(file)
+	if elfError != nil {
+		file.Close()
+		return nil, StartFailure(stage, "BROWSER_BINARY_INVALID", "Invalid ELF executable.")
+	}
+	expected := map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64}[runtime.GOARCH]
+	if engine.Machine != expected || engine.Class != elf.ELFCLASS64 || engine.Data != elf.ELFDATA2LSB {
+		file.Close()
+		return nil, StartFailure(stage, "BROWSER_ARCH_MISMATCH", "ELF CPU architecture does not match the node.")
 	}
 	if _, e = file.Seek(0, io.SeekStart); e != nil {
 		file.Close()
-		return nil, errors.New("BROWSER_UNAVAILABLE")
+		return nil, StartFailure(stage, "BROWSER_BINARY_INVALID", "Renderer is not a readable, private ELF executable.")
 	}
 	h := sha256.New()
 	_, e = io.Copy(h, file)
 	file.Close()
 	if e != nil || hex.EncodeToString(h.Sum(nil)) != strings.ToLower(c.SHA256) {
-		return nil, errors.New("BROWSER_UNAVAILABLE")
+		return nil, StartFailure(stage, "BROWSER_PIN_MISMATCH", "")
 	}
 	exe, e := os.Executable()
 	if e != nil {
-		return nil, e
+		return nil, StartFailure("helper_executable", "BROWSER_WORKER_FAILED", "")
 	}
 	ctx, cancel := context.WithCancel(parent)
 	b := &Browser{Config: c, Proxy: p, ctx: ctx, cancel: cancel, done: make(chan struct{}), pages: make(map[string]*Page), keys: make(map[string]v3.Input), Events: make(chan Event, 32), scope: "wolf-browser-" + v3.NewID().String() + ".scope"}
+	scope = b.scope
+	checkpoint("control_pipes")
 	inputR, inputW, e := os.Pipe()
 	if e != nil {
 		cancel()
-		return nil, e
+		return nil, StartFailure(stage, "BROWSER_IPC_FAILED", "")
 	}
 	outputR, outputW, e := os.Pipe()
 	if e != nil {
 		inputR.Close()
 		inputW.Close()
 		cancel()
-		return nil, e
+		return nil, StartFailure(stage, "BROWSER_IPC_FAILED", "")
 	}
 	args := []string{"--user", "--scope", "--quiet", "--unit=" + b.scope, "-p", "MemoryMax=" + strconv.Itoa(c.MemoryMB) + "M", "-p", "MemorySwapMax=0", "-p", "TasksMax=" + strconv.Itoa(c.Tasks), "-p", "CPUQuota=" + strconv.Itoa(c.CPUPercent) + "%", "-p", "RuntimeMaxSec=1800", "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64", "--proc", "/proc", "--dev", "/dev", "--dir", "/etc"}
 	for _, path := range []string{"/etc/fonts", "/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/ld.so.cache"} {
@@ -154,59 +210,88 @@ func Start(parent context.Context, c Config, p *browsernet.Proxy) (*Browser, err
 	b.cmd.Stdout = io.Discard
 	diagnostic := &startupBuffer{enabled: true}
 	b.cmd.Stderr = diagnostic
+	checkpoint("scope_launch")
 	if e = b.cmd.Start(); e != nil {
 		inputR.Close()
 		inputW.Close()
 		outputR.Close()
 		outputW.Close()
 		cancel()
-		return nil, errors.New("BROWSER_START_FAILED")
+		return nil, StartFailure(stage, "BROWSER_IPC_FAILED", "Could not execute systemd-run; check its execution permissions and process/file limits.")
 	}
 	inputR.Close()
 	outputW.Close()
 	b.cdp = newCDP(outputR, inputW)
-	go func() { _ = b.cmd.Wait(); b.cdp.close(); close(b.done); b.cancel() }()
+	go func() { b.exitError = b.cmd.Wait(); b.cdp.close(); close(b.done); b.cancel() }()
 	startup, stop := context.WithTimeout(ctx, c.Startup)
 	defer stop()
+	fail := func(err error) (*Browser, error) {
+		resource := b.startupScopeEvidence()
+		status := "not exited before cleanup"
+		select {
+		case <-b.done:
+			var exit *exec.ExitError
+			if errors.As(b.exitError, &exit) {
+				status = fmt.Sprintf("exit code %d", exit.ExitCode())
+			} else if b.exitError == nil {
+				status = "exit code 0"
+			} else {
+				status = "launcher wait failed"
+			}
+		default:
+		}
+		failure := classifyStartup(stage, diagnostic.String(), errors.Is(err, context.DeadlineExceeded), resource, err)
+		var typed *startupError
+		if errors.As(err, &typed) {
+			failure = err
+		}
+		d := Diagnosis(failure)
+		if engine := engineExit.FindStringSubmatch(diagnostic.String()); len(engine) == 3 {
+			status += "; engine " + strings.ToLower(engine[1]) + " " + engine[2]
+		}
+		d.ExitStatus = status
+		b.Close()
+		return nil, &startupError{diagnostic: d}
+	}
+	checkpoint("cdp_version")
 	var version struct {
 		Product string `json:"product"`
 	}
 	if e = b.cdp.call(startup, "", "Browser.getVersion", map[string]any{}, &version); e != nil {
-		b.Close()
-		return nil, &startupError{diagnostic: diagnostic.String()}
+		return fail(e)
 	}
 	if !strings.Contains(version.Product, "Chrome") && !strings.Contains(version.Product, "Chromium") {
-		b.Close()
-		return nil, errors.New("BROWSER_START_FAILED")
+		return fail(StartFailure(stage, "BROWSER_CDP_FAILED", "Renderer did not identify as Chromium."))
 	}
+	checkpoint("cdp_context")
 	var bc struct {
 		ID string `json:"browserContextId"`
 	}
 	if e = b.cdp.call(startup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true}, &bc); e != nil {
-		b.Close()
-		return nil, &startupError{diagnostic: diagnostic.String()}
+		return fail(e)
 	}
 	b.contextID = bc.ID
+	checkpoint("cdp_download_policy")
 	if e = b.cdp.call(startup, "", "Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "browserContextId": bc.ID}, nil); e != nil {
-		b.Close()
-		return nil, &startupError{diagnostic: diagnostic.String()}
+		return fail(e)
 	}
+	checkpoint("cdp_permissions")
 	for _, permission := range []string{"microphone", "camera", "geolocation", "notifications", "clipboard-read", "clipboard-write"} {
 		if e = b.cdp.call(startup, "", "Browser.setPermission", map[string]any{"permission": map[string]string{"name": permission}, "setting": "denied", "browserContextId": bc.ID}, nil); e != nil {
-			b.Close()
-			return nil, errors.New("BROWSER_START_FAILED")
+			return fail(e)
 		}
 	}
+	checkpoint("sandbox_verification")
 	if e = b.verifySandbox(startup); e != nil {
-		b.Close()
-		return nil, e
+		return fail(e)
 	}
 	b.approved = make(map[string]bool)
 	b.potential = make(map[string]bool)
+	checkpoint("cdp_target_discovery")
 	if e = b.cdp.call(startup, "", "Target.setDiscoverTargets", map[string]bool{"discover": true}, nil); e != nil {
-		b.Close()
-		return nil, e
+		return fail(e)
 	}
+
 	diagnostic.disable()
 	go b.events()
 	return b, nil
@@ -229,7 +314,7 @@ func (b *Browser) verifySandbox(ctx context.Context) error {
 		return e
 	}
 	last := ""
-	for i := 0; i < 40; i++ {
+	for {
 		var result struct {
 			Result struct {
 				Value string `json:"value"`
@@ -240,13 +325,15 @@ func (b *Browser) verifySandbox(ctx context.Context) error {
 		if e == nil && regexp.MustCompile(`(?i)Seccomp-BPF sandbox\s+Yes`).MatchString(result.Result.Value) && regexp.MustCompile(`(?i)(Namespace Sandbox\s+Yes|Layer 1 Sandbox\s+Namespace)`).MatchString(result.Result.Value) {
 			return nil
 		}
+		if e == nil && regexp.MustCompile(`(?i)Seccomp-BPF sandbox\s+(Yes|No)`).MatchString(last) && regexp.MustCompile(`(?i)(Namespace Sandbox\s+(Yes|No)|Layer 1 Sandbox\s+\S+)`).MatchString(last) {
+			return StartFailure("sandbox_verification", "BROWSER_SANDBOX_REJECTED", fmt.Sprintf("Namespace sandbox confirmed=%t; seccomp-BPF sandbox confirmed=%t.", regexp.MustCompile(`(?i)(Namespace Sandbox\s+Yes|Layer 1 Sandbox\s+Namespace)`).MatchString(last), regexp.MustCompile(`(?i)Seccomp-BPF sandbox\s+Yes`).MatchString(last)))
+		}
 		select {
 		case <-ctx.Done():
-			return errors.New("BROWSER_START_FAILED")
+			return StartFailure("sandbox_verification", "BROWSER_START_TIMEOUT", "Sandbox report was not available before the initialization deadline.")
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	return &startupError{diagnostic: "sandbox report: " + last}
 }
 func (b *Browser) Close() {
 	b.once.Do(func() {
@@ -682,10 +769,6 @@ func virtualKey(code string) int {
 func (b *Browser) String() string {
 	return fmt.Sprintf("isolated Chromium (%d pages maximum)", b.Config.MaxTabs)
 }
-
-type startupError struct{ diagnostic string }
-
-func (e *startupError) Error() string { return "BROWSER_START_FAILED" }
 
 type startupBuffer struct {
 	mu      sync.Mutex

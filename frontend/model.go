@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"wolftunnel/internal/browserdiag"
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/nodeclient"
 	"wolftunnel/internal/protocol"
@@ -249,6 +250,9 @@ func (m *Model) ImportInvitation(raw string) (string, error) {
 // ConnectionMessage is the user-facing explanation; structured codes remain in
 // diagnostics. It never includes peer-supplied strings or bearer credentials.
 func ConnectionMessage(code string) string {
+	if advice := browserdiag.Message(code); advice != "" {
+		return advice
+	}
 	switch code {
 	case "UNSUPPORTED_VERSION":
 		return "This node and client do not support the same protocol. Browser sessions require a v0.5 node."
@@ -264,8 +268,6 @@ func ConnectionMessage(code string) string {
 		return "The request timed out."
 	case "BROWSER_UNAVAILABLE":
 		return "The node needs a pinned browser and its isolation services. Ask its owner to enable browser sessions."
-	case "BROWSER_START_FAILED":
-		return "The node could not start a sandboxed browser. Ask its owner to check browser dependencies and resource limits."
 	case "BROWSER_CRASHED", "PIXEL_ERROR":
 		return "The remote browser stopped or returned an invalid image. Navigate again to start a fresh session."
 	case "BROWSER_TIMEOUT":

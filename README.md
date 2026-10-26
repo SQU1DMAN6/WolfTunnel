@@ -44,6 +44,11 @@ New state defaults to `~/.local/share/wolftunnel/node/` and `client/`; connectio
 errors are timestamped in `~/.local/share/wolftunnel/logs/client.log`. Existing
 default installation keys are preserved.
 
+If authentication works but rendering fails, run `wolfnode -diagnose-browser` on
+the node as its normal account. It reports the production sandbox's failing stage
+and mitigation. The current node log is `logs/node.log` under the printed state
+directory. See [browser troubleshooting](docs/BROWSER-TROUBLESHOOTING.md).
+
 See [SETUP.md](SETUP.md) for installation, [USAGE.md](USAGE.md) for everyday use, [ARCHITECTURE.md](ARCHITECTURE.md)
 for execution boundaries, [Protocol v3](docs/PROTOCOL-v3.md) for the wire format,
 and the [ARM64 implementation and validation report](doc/ARM64-2026_10_26.md)

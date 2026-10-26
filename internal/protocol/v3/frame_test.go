@@ -122,3 +122,15 @@ func TestServerReplySchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestStartupCodesCrossProtocolButRawMessagesDoNot(t *testing.T) {
+	for _, code := range []string{"BROWSER_NAMESPACE_DENIED", "BROWSER_USER_SESSION_UNAVAILABLE", "BROWSER_DEPENDENCY_MISSING", "BROWSER_MEMORY_LIMIT", "BROWSER_TASK_LIMIT", "BROWSER_SANDBOX_REJECTED"} {
+		_, err := Decode(Frame{Type: Error, Payload: Encode(Control{Code: code})})
+		if err != nil || SafeCode(code) != code {
+			t.Fatal("startup diagnosis lost", code, err)
+		}
+	}
+	if SafeCode("https://private.test/secret") != "INTERNAL_ERROR" {
+		t.Fatal("raw error allowed")
+	}
+}

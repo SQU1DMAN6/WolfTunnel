@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -41,12 +42,16 @@ func run() error {
 	browserConfig := flag.String("browser-config", "", "private browser JSON configuration")
 	browserBin := flag.String("browser-bin", "", "pinned Chromium/Chromium-based executable")
 	prepare := flag.Bool("prepare-renderer", false, "provision the managed renderer and exit")
+	diagnose := flag.Bool("diagnose-browser", false, "check the actual sandboxed browser and blank pixels, print safe JSON checkpoints, and exit")
 	rendererDir := flag.String("renderer-dir", "", "managed renderer cache; saved for later node launches")
 	rendererArchive := flag.String("renderer-archive", "", "offline copy of the pinned renderer archive")
 	rendererPlatform := flag.String("renderer-platform", runtime.GOOS+"-"+runtime.GOARCH, "with -prepare-renderer only, provision a release for linux-amd64 or linux-arm64")
 	codeOnly := flag.Bool("code-only", false, "with -issue-enrolment, emit a raw code instead of a complete invitation")
 	browserHash := flag.String("browser-sha256", "", "expected browser executable SHA-256")
 	flag.Parse()
+	if *diagnose && (*prepare || *issue || *revoke != "") {
+		return fmt.Errorf("-diagnose-browser cannot be combined with administrative operations")
+	}
 	if *rendererPlatform != runtime.GOOS+"-"+runtime.GOARCH && !*prepare {
 		return fmt.Errorf("-renderer-platform is only valid with -prepare-renderer; normal startup uses the native CPU")
 	}
@@ -102,6 +107,9 @@ func run() error {
 	s, err := node.Open(*state)
 	if err != nil {
 		return err
+	}
+	if *diagnose {
+		fmt.Fprintf(os.Stderr, "Browser diagnostics\nState: %s\nCurrent node log: %s\nPlatform: %s-%s\n", *state, filepath.Join(*state, "logs", "node.log"), runtime.GOOS, runtime.GOARCH)
 	}
 	if *issue {
 		if !*codeOnly && *inviteAddress == "" {
@@ -190,7 +198,9 @@ func run() error {
 		s.Audit.Log(audit.Entry{Event: "renderer_ready", Component: "renderer", Status: installed.Version})
 	}
 	if !bc.Valid() || bc.Binary == "" {
-		return fmt.Errorf("invalid browser configuration")
+		err := browser.StartFailure("configuration", "BROWSER_CONFIG_INVALID", "")
+		browser.RecordDiagnostic(s.Audit, browser.Diagnosis(err), "", "")
+		return err
 	}
 	if configPath == filepath.Join(*state, "browser.json") || settings.ManagedRenderer {
 		if err = storage.Write(configPath, bc); err != nil {
@@ -200,6 +210,13 @@ func run() error {
 	if err = settings.Save(*state); err != nil {
 		return err
 	}
+	if *diagnose {
+		encoder := json.NewEncoder(os.Stdout)
+		return browser.Check(ctx, bc, func(d browser.StartupDiagnostic) {
+			browser.RecordDiagnostic(s.Audit, d, "", "")
+			_ = encoder.Encode(d)
+		})
+	}
 	if err = s.EnableBrowser(bc); err != nil {
 		return err
 	}
@@ -207,7 +224,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("WolfTunnel v0.5 node ready on %s\nState: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\n", ln.Addr(), *state, s.Fingerprint)
+	fmt.Printf("WolfTunnel v0.5 node ready on %s\nState: %s\nCurrent node log: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\nReady means TLS listener ready; browser startup is checked when a browser session opens.\n", ln.Addr(), *state, filepath.Join(*state, "logs", "node.log"), s.Fingerprint)
 	if err = s.Serve(ctx, ln); err != nil {
 		return err
 	}

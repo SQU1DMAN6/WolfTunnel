@@ -17,17 +17,19 @@ import (
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/auth"
 	"wolftunnel/internal/browser"
+	"wolftunnel/internal/browserdiag"
 	"wolftunnel/internal/browsernet"
 	"wolftunnel/internal/pixelstream"
 	v3 "wolftunnel/internal/protocol/v3"
 )
 
 type wire struct {
-	c   net.Conn
-	r   io.Reader
-	mu  sync.Mutex
-	out uint64
-	in  uint64
+	c                  net.Conn
+	r                  io.Reader
+	mu                 sync.Mutex
+	out                uint64
+	in                 uint64
+	startupDiagnostics bool
 }
 
 func (w *wire) read() (v3.Frame, v3.Control, error) {
@@ -87,6 +89,9 @@ func (m *Manager) log(event, client string, id v3.ID, code string) {
 func (m *Manager) fail(w *wire, id v3.ID, client, code string) {
 	code = v3.SafeCode(code)
 	m.log("browser_error", client, id, code)
+	if _, specific := browserdiag.Lookup(code); specific && !w.startupDiagnostics {
+		code = "BROWSER_START_FAILED"
+	}
 	_ = w.send(v3.Error, id, v3.Control{Code: code})
 }
 func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
@@ -106,7 +111,7 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		m.fail(w, v3.ID{}, "", "UNSUPPORTED_VERSION")
 		return
 	}
-	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input"}}) != nil {
+	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input", "browser-start-diagnostics"}}) != nil {
 		return
 	}
 	f, a, e := w.read()
@@ -124,6 +129,7 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		m.fail(w, f.Session, "", "AUTH_FAILED")
 		return
 	}
+	w.startupDiagnostics = len(a.Capabilities) == 1 && a.Capabilities[0] == "browser-start-diagnostics"
 	if w.send(v3.AuthResult, f.Session, v3.Control{ClientID: a.ClientID}) != nil {
 		return
 	}
@@ -186,11 +192,13 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 	defer s.close()
 	proxy, e := browsernet.New(ctx, m.ProxyOptions)
 	if e != nil {
-		m.fail(w, s.id, s.owner, "BROWSER_START_FAILED")
+		err := browser.StartFailure("egress_proxy", "BROWSER_EGRESS_FAILED", "Private egress proxy directory or socket creation failed.")
+		browser.RecordDiagnostic(m.Log, browser.Diagnosis(err), s.owner, s.id.String())
+		m.fail(w, s.id, s.owner, err.Error())
 		return
 	}
 	_ = c.SetDeadline(time.Now().Add(cfg.Startup + 5*time.Second))
-	launched, startError := browser.Start(ctx, cfg, proxy)
+	launched, startError := browser.StartObserved(ctx, cfg, proxy, func(d browser.StartupDiagnostic) { browser.RecordDiagnostic(m.Log, d, s.owner, s.id.String()) })
 	e = startError
 	if e != nil {
 		proxy.Close()

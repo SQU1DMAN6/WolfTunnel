@@ -57,6 +57,16 @@ in `browser_us`. PONG acknowledges the PING sequence in `ack`. ERROR permits an
 optional tab ID. NAVIGATION_STATUS may carry the current public HTTP(S) target
 for the native address bar; it stays encrypted and is never logged.
 
+Nodes implementing detailed startup diagnoses advertise
+`browser-start-diagnostics` in NODE_IDENTITY capabilities. A supporting client
+includes that single capability in its signed AUTHENTICATE payload only after
+seeing the advertisement. The new field is optional; no header/version change is
+required. The node validates the capability list and signature before enabling
+specific browser-start error codes. Older clients omit it and receive the legacy
+`BROWSER_START_FAILED`; the node retains the specific local diagnosis. New clients
+connecting to older nodes send the original authentication schema. Error text
+and mitigation are derived from a local fixed catalog, never arbitrary peer text.
+
 Independent images permit sequence gaps without a missing base. Stale or repeated
 sequences fail closed. Resize mismatches request a complete FRAME_REFRESH and
 drop the stale-size image. Equal captures are suppressed; a configurable periodic

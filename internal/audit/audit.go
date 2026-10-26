@@ -24,32 +24,40 @@ type Logger struct {
 }
 
 type Entry struct {
-	Time       string `json:"time"`
-	Event      string `json:"event"`
-	Target     string `json:"target,omitempty"`
-	ID         string `json:"request_id,omitempty"`
-	Status     string `json:"status,omitempty"`
-	ClientID   string `json:"client_id,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
-	Code       string `json:"code,omitempty"`
-	Error      string `json:"error,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
-	Component  string `json:"component,omitempty"`
-	Endpoint   string `json:"endpoint,omitempty"`
-	Frames     uint64 `json:"frames,omitempty"`
-	PixelBytes uint64 `json:"pixel_bytes,omitempty"`
-	Dropped    uint64 `json:"dropped_frames,omitempty"`
+	Time        string `json:"time"`
+	Event       string `json:"event"`
+	Target      string `json:"target,omitempty"`
+	ID          string `json:"request_id,omitempty"`
+	Status      string `json:"status,omitempty"`
+	ClientID    string `json:"client_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	Code        string `json:"code,omitempty"`
+	Error       string `json:"error,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+	Component   string `json:"component,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	Frames      uint64 `json:"frames,omitempty"`
+	PixelBytes  uint64 `json:"pixel_bytes,omitempty"`
+	Dropped     uint64 `json:"dropped_frames,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+	Evidence    string `json:"evidence,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	ExitStatus  string `json:"exit_status,omitempty"`
 }
 
 func New(dir string, retention time.Duration) (*Logger, error) {
-	return newLogger(dir, retention, "wolfnode-")
+	return newFixedLogger(dir, retention, "wolfnode-", "node.log")
 }
 func NewClient(dir string, retention time.Duration) (*Logger, error) {
-	l, err := newLogger(dir, retention, "wolfclient-")
+	return newFixedLogger(dir, retention, "wolfclient-", "client.log")
+}
+func newFixedLogger(dir string, retention time.Duration, prefix, fixed string) (*Logger, error) {
+	l, err := newLogger(dir, retention, prefix)
 	if err != nil {
 		return nil, err
 	}
-	l.fixed = "client.log"
+	l.fixed = fixed
 	for _, suffix := range []string{"", ".1", ".2", ".3"} {
 		path := filepath.Join(dir, l.fixed+suffix)
 		if info, e := os.Lstat(path); e == nil && info.Mode().IsRegular() && info.ModTime().Before(time.Now().Add(-l.retention)) {
@@ -59,7 +67,7 @@ func NewClient(dir string, retention time.Duration) (*Logger, error) {
 		}
 	}
 	if info, e := os.Lstat(filepath.Join(dir, l.fixed)); e == nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0) {
-		return nil, fmt.Errorf("client.log must be a private regular file")
+		return nil, fmt.Errorf("%s must be a private regular file", fixed)
 	} else if e != nil && !os.IsNotExist(e) {
 		return nil, e
 	}
@@ -202,7 +210,7 @@ func (l *Logger) writeFixed(e Entry) error {
 	path := filepath.Join(l.dir, l.fixed)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-			return fmt.Errorf("insecure client.log")
+			return fmt.Errorf("insecure diagnostic log")
 		}
 		if info.Size() >= 1<<20 {
 			for n := 3; n >= 1; n-- {

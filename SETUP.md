@@ -165,6 +165,14 @@ systemctl --user stop wolfnode.service
 They show startup errors, restart the node after a change, or stop it. Node audit
 logs are in its state directory's `logs/` folder.
 
+The current combined node log is `logs/node.log` under the state path printed at
+startup (normally `~/.local/share/wolftunnel/node/logs/node.log`). It includes
+browser startup stages, specific failures and remedies. Hourly JSONL files also
+remain available; reading one older hourly file can miss the current failure.
+If clients connect but pages cannot render, run `wolfnode -diagnose-browser` as
+the node account with the same state location/environment as the service. See
+[browser troubleshooting](docs/BROWSER-TROUBLESHOOTING.md) for each failure and fix.
+
 ## Optional: deploy the renderer with the node
 
 ```sh
