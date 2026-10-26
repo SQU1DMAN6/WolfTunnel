@@ -4,10 +4,13 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -76,7 +79,10 @@ func TestRendererRejectsTraversalDuplicatesSymlinksAndUnknownFiles(t *testing.T)
 	}
 }
 func TestRendererPinAndCancelledInstall(t *testing.T) {
-	m := Lock()
+	m, e := Lock()
+	if e != nil {
+		t.Fatal(e)
+	}
 	if len(m.Files) < 2 || m.Files[m.Binary] != m.BinarySHA256 || len(m.ArchiveSHA256) != 64 {
 		t.Fatal("incomplete runtime pin")
 	}
@@ -90,5 +96,73 @@ func TestRendererPinAndCancelledInstall(t *testing.T) {
 	p, manifest := archiveFixture(t, []string{"engine/chrome"}, false)
 	if e := unpack(ctx, p, t.TempDir(), manifest); !errors.Is(e, context.Canceled) {
 		t.Fatal("cancel ignored", e)
+	}
+}
+
+func TestPlatformManifests(t *testing.T) {
+	for _, platform := range []string{"linux-amd64", "linux-arm64"} {
+		t.Run(platform, func(t *testing.T) {
+			m, e := ManifestFor(platform)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if m.Platform != platform || m.Version == "" || len(m.Files) < 100 || m.Files[m.Binary] != m.BinarySHA256 || len(m.ArchiveSHA256) != 64 {
+				t.Fatal("incomplete or wrong architecture manifest")
+			}
+			for name, digest := range m.Files {
+				if !safePath(name) || len(digest) != 64 {
+					t.Fatal("invalid manifest entry", name)
+				}
+			}
+			if !strings.HasPrefix(m.URL, "https://storage.googleapis.com/chrome-for-testing-public/"+m.Version+"/") {
+				t.Fatal("unexpected runtime origin")
+			}
+		})
+	}
+	m, e := Lock()
+	if e != nil || m.Platform != runtime.GOOS+"-"+runtime.GOARCH {
+		t.Fatal("runtime does not select the executing CPU", e)
+	}
+	if _, e = ManifestFor("linux-riscv64"); e == nil {
+		t.Fatal("unsupported architecture silently fell back")
+	}
+	if _, e = EnsureFor(context.Background(), filepath.Join(t.TempDir(), "cache"), "", "linux-riscv64"); e == nil {
+		t.Fatal("installer accepted an unsupported architecture")
+	}
+	amd, _ := ManifestFor("linux-amd64")
+	arm, _ := ManifestFor("linux-arm64")
+	if amd.BinarySHA256 == arm.BinarySHA256 || directory("cache", amd) == directory("cache", arm) {
+		t.Fatal("architectures share an engine/cache")
+	}
+}
+
+// This opt-in test validates the real ARM archive on either host architecture.
+func TestARM64RuntimeArchive(t *testing.T) {
+	archive := os.Getenv("WOLF_RENDERER_ARCHIVE_ARM64")
+	if archive == "" {
+		t.Skip("set WOLF_RENDERER_ARCHIVE_ARM64 to the pinned upstream archive")
+	}
+	base := filepath.Join(t.TempDir(), "cache")
+	i, e := EnsureFor(context.Background(), base, archive, "linux-arm64")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(i.Binary, "linux-arm64/chrome-linux-arm64/chrome") {
+		t.Fatal("wrong runtime installed")
+	}
+	executable, e := elf.Open(i.Binary)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer executable.Close()
+	if executable.Machine != elf.EM_AARCH64 || executable.Class != elf.ELFCLASS64 {
+		t.Fatal("managed ARM runtime is not a 64-bit AArch64 executable")
+	}
+	// The second launch verifies the cache without needing the original archive.
+	if _, e = EnsureFor(context.Background(), base, "/missing.zip", "linux-arm64"); e != nil {
+		t.Fatal("verified cache not reused", e)
+	}
+	if _, e = EnsureFor(context.Background(), filepath.Join(t.TempDir(), "cache"), archive, "linux-amd64"); !errors.Is(e, ErrIntegrity) {
+		t.Fatal("ARM64 archive accepted as an amd64 runtime", e)
 	}
 }

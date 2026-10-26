@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,9 +43,13 @@ func run() error {
 	prepare := flag.Bool("prepare-renderer", false, "provision the managed renderer and exit")
 	rendererDir := flag.String("renderer-dir", "", "managed renderer cache; saved for later node launches")
 	rendererArchive := flag.String("renderer-archive", "", "offline copy of the pinned renderer archive")
+	rendererPlatform := flag.String("renderer-platform", runtime.GOOS+"-"+runtime.GOARCH, "with -prepare-renderer only, provision a release for linux-amd64 or linux-arm64")
 	codeOnly := flag.Bool("code-only", false, "with -issue-enrolment, emit a raw code instead of a complete invitation")
 	browserHash := flag.String("browser-sha256", "", "expected browser executable SHA-256")
 	flag.Parse()
+	if *rendererPlatform != runtime.GOOS+"-"+runtime.GOARCH && !*prepare {
+		return fmt.Errorf("-renderer-platform is only valid with -prepare-renderer; normal startup uses the native CPU")
+	}
 	*state, err = filepath.Abs(*state)
 	if err != nil {
 		return err
@@ -84,7 +89,7 @@ func run() error {
 	if *prepare {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		installed, e := renderer.Ensure(ctx, managedBase, *rendererArchive)
+		installed, e := renderer.EnsureFor(ctx, managedBase, *rendererArchive, *rendererPlatform)
 		if e != nil {
 			return e
 		}

@@ -5,7 +5,9 @@ its own pinned Chromium-based renderer: **you do not install Chromium or create 
 browser configuration to get started**. First launch downloads the runtime once;
 later launches reuse it. A deployment bundle can include it for offline startup.
 
-These instructions target Linux amd64 with systemd. Use an ordinary login account
+These instructions target Linux **amd64 or ARM64** with systemd, including Ubuntu
+24.04+ servers. On ARM64, use the ARM64 Go toolchain and build on that machine;
+the node automatically downloads the native ARM64 renderer. Use an ordinary login account
 for the node; `sudo` is only for installing system prerequisites and enabling
 startup. No desktop environment or SDL libraries are needed on the node.
 
@@ -22,11 +24,11 @@ This produces the node executable without building the desktop client. You may
 also receive a prebuilt node or the deployment bundle described below.
 
 The host still needs bubblewrap, a working systemd user session/cgroup v2, and
-common Linux browser runtime libraries. On Debian 13, install them with:
+common Linux browser runtime libraries. On Ubuntu 24.04+ or Debian 13, install them with:
 
 ```sh
 sudo apt update
-sudo apt install bubblewrap dbus-user-session libpam-systemd ca-certificates fonts-liberation fonts-noto-cjk fonts-noto-color-emoji libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libdbus-1-3 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2t64 libcairo2 libpango-1.0-0 libgtk-3-0t64 libvulkan1
+sudo apt install bubblewrap dbus-user-session libpam-systemd ca-certificates fonts-liberation fonts-noto-cjk fonts-noto-color-emoji libnss3 libnspr4 libglib2.0-0t64 libudev1 libgcc-s1 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libdbus-1-3 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2t64 libcairo2 libpango-1.0-0 libgtk-3-0t64 libvulkan1
 ```
 
 These are isolation, networking, graphics and font libraries; they do not install
@@ -35,6 +37,18 @@ them. If you just installed user-session support, log out and log back in.
 The host must permit unprivileged user/PID/network namespaces and Chromium's
 sandbox. Restricted containers that prohibit these features will not work;
 use a suitably configured Linux host or VM instead of disabling the sandbox.
+
+Ubuntu's [AppArmor policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/#apparmor-unprivileged-user-namespace-restrictions)
+can also restrict these namespaces. The host policy must allow bubblewrap and
+Chromium's nested namespace sandbox, including creation of the private network
+namespace. An administrator should check AppArmor denials and adjust the relevant
+application profiles if necessary. Keep AppArmor enabled; WolfTunnel does not
+change the host's security policy or fall back to an unsandboxed browser.
+
+An SSH login is enough for the node: keep `dbus-user-session` and `libpam-systemd`
+installed and log in as the node account so its systemd user manager is available.
+The desktop client needs an actual graphical session; running it in a plain SSH
+terminal will not create a usable desktop window.
 
 ## 2. Start it
 
@@ -157,12 +171,19 @@ logs are in its state directory's `logs/` folder.
 make node-package
 ```
 
-This builds `build/wolfnode-linux-amd64.tar.gz` with the executable and its pinned
+This builds `build/wolfnode-linux-amd64.tar.gz` on amd64 or
+`build/wolfnode-linux-arm64.tar.gz` on ARM64, with the executable and its pinned
 renderer. Extract it together on the destination host and run the included
 `wolfnode`, leaving `renderer/` beside it. The node verifies the complete bundle
 and uses it without a renderer download or system Chromium installation. The
 Linux isolation/runtime-library requirements above still apply. Keep upstream
 runtime notices with the bundle.
+
+To package an ARM64 node on an amd64 development machine, use
+`make node-package GOOS=linux GOARCH=arm64`. The installer runs on the build host
+and provisions the ARM64 package without executing ARM64 code there. Transfer
+the resulting ARM64 archive to the ARM64 host. This command replaces
+`build/wolfnode` with the target binary; `make node` rebuilds the native version.
 
 ## Optional: adjust browser defaults
 
@@ -210,6 +231,10 @@ last one year and require deliberate identity rotation and new client trust.
    the complete invitation and choose **Connect**. If building the desktop client,
    install Go 1.27+, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
    **3.2.2**, then use `make build` and `./build/wolfclient`.
+   On an ARM64 desktop, use ARM64 builds of these libraries and compile locally;
+   amd64 shared libraries cannot be used by an ARM64 client. If the distribution
+   packages other SDL versions, build the pinned upstream releases first. See
+   [native frontend dependencies](frontend/README.md) for the source build steps.
 2. Enter a public HTTP/HTTPS URL and choose **Go**. The node runs the browser;
    the client displays its pixels. Mouse, keyboard, scrolling, tabs and resize
    operate the remote page. The client needs no local browser engine.
@@ -233,7 +258,7 @@ To revoke an installation, use its public Client ID from Settings diagnostics:
 wolfnode -revoke CLIENT_ID
 ```
 
-A working node needs Linux amd64, the isolation/runtime dependencies listed above,
+A working node needs Linux amd64 or ARM64, the isolation/runtime dependencies listed above,
 a maintained managed renderer, adequate resources, a reachable TCP address and
 private persistent state. Missing isolation must be fixed on the host; never run
 the browser as root or disable sandboxing to bypass an error.

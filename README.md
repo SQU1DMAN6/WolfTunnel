@@ -11,7 +11,7 @@ remain available; audio and file/clipboard transfer remain deferred.
 Install Go 1.27.x, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
 **3.2.2** development/runtime libraries. The font is embedded DejaVu Sans 2.37.
 There are no third-party Go modules. Browser-enabled nodes currently require
-Linux, unprivileged namespaces, bubblewrap, a working systemd user manager with
+Linux amd64 or ARM64, unprivileged namespaces, bubblewrap, a working systemd user manager with
 cgroup v2 delegation, and common Linux browser libraries. The node provisions an application-private,
 SHA-256-pinned Chromium-based runtime automatically; no system Chromium package
 or manual browser configuration is required. An offline deployment bundle is
@@ -29,6 +29,7 @@ make browser-smoke  # managed-runtime fixture/browser checks
 make browser-native # desktop screenshot with managed runtime
 make production-smoke # local :13300, public HTTPS and native input
 make node-package   # executable + renderer deployment archive
+make node-package GOARCH=arm64 # cross-package the ARM64 node and native renderer
 ```
 
 `browser-smoke` also starts a temporary local node and built client, renders
@@ -45,7 +46,7 @@ default installation keys are preserved.
 
 See [SETUP.md](SETUP.md) for installation, [USAGE.md](USAGE.md) for everyday use, [ARCHITECTURE.md](ARCHITECTURE.md)
 for execution boundaries, [Protocol v3](docs/PROTOCOL-v3.md) for the wire format,
-and the [managed-renderer and usability report](docs/USABILITY-2026_10_25.md)
+and the [ARM64 implementation and validation report](doc/ARM64-2026_10_26.md)
 for requirement coverage, measurements and remaining release considerations.
 
 Each installation has its own Ed25519 key. Existing policy remains: owner-issued

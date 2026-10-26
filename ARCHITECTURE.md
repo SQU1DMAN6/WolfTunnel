@@ -162,7 +162,7 @@ seven-day retention by default, maximum 64 files; protected backups may outlive
 retention. Capture artifacts exist only through explicit capture/test requests.
 
 See [THREAT_MODEL-v0_5.md](docs/THREAT_MODEL-v0_5.md) and the
-[validation report](docs/USABILITY-2026_10_25.md) for tested boundaries
+[validation report](doc/ARM64-2026_10_26.md) for tested boundaries
 and remaining limits. Audio, file transfer, clipboard sync, accessibility and
 production packaging need separate work.
 
@@ -176,6 +176,14 @@ size caps, an install lock, traversal/symlink rejection, complete hash validatio
 and atomic publication. Existing corrupted runtimes fail closed. This is an
 application-private/bundled engine, not a statically linked Go HTML renderer;
 Linux system libraries, bubblewrap and user systemd/cgroups remain required.
+
+Linux amd64 and ARM64 have separate embedded runtime manifests. Normal startup
+selects the executing CPU; cache directories and release archives include that
+architecture. Cross-platform provisioning is restricted to the explicit
+`-prepare-renderer -renderer-platform` operation. Packaging runs its installer
+on the build host and includes only the target runtime. The node remains pure Go;
+the desktop client links the target architecture's SDL3/SDL3_ttf libraries.
+Linux native diagnostic redirection uses `dup3`, available on both architectures.
 
 New defaults use XDG data directories (`~/.local/share/wolftunnel/node` and
 `client`). Explicit XDG selection overrides legacy discovery; without it,

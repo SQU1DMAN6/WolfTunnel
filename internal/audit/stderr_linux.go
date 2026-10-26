@@ -25,7 +25,9 @@ func CaptureNativeStderr(logger *Logger) (func(), error) {
 		terminal.Close()
 		return nil, e
 	}
-	if e = syscall.Dup2(int(writer.Fd()), 2); e != nil {
+	// ARM64 implements dup3 rather than the legacy dup2 syscall. Both supported
+	// Linux architectures provide dup3; flags=0 keeps stderr open across exec.
+	if e = syscall.Dup3(int(writer.Fd()), 2, 0); e != nil {
 		reader.Close()
 		writer.Close()
 		terminal.Close()
@@ -55,7 +57,7 @@ func CaptureNativeStderr(logger *Logger) (func(), error) {
 		}
 	}()
 	var once sync.Once
-	return func() { once.Do(func() { _ = syscall.Dup2(saved, 2); <-done; terminal.Close() }) }, nil
+	return func() { once.Do(func() { _ = syscall.Dup3(saved, 2, 0); <-done; terminal.Close() }) }, nil
 }
 func nativeDiagnostic(message string) (string, string) {
 	if strings.Contains(message, "libdecor") && strings.Contains(message, "failed") {

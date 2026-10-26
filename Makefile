@@ -1,7 +1,13 @@
 .PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke
 GO ?= go
-BROWSER_VERSION = $(shell sed -n 's/  "version": "\([^"]*\)",/\1/p' internal/renderer/runtime-lock.json)
-BROWSER ?= $(CURDIR)/build/renderer/$(BROWSER_VERSION)-linux-amd64/chrome-linux64/chrome
+GOOS ?= $(shell $(GO) env GOOS)
+GOARCH ?= $(shell $(GO) env GOARCH)
+HOST_GOOS = $(shell $(GO) env GOHOSTOS)
+HOST_GOARCH = $(shell $(GO) env GOHOSTARCH)
+BROWSER_MANIFEST = internal/renderer/runtime-lock$(if $(filter arm64,$(GOARCH)),-linux-arm64,).json
+BROWSER_VERSION = $(shell sed -n 's/  "version": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
+BROWSER_BINARY = $(shell sed -n 's/  "binary": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
+BROWSER ?= $(CURDIR)/build/renderer/$(BROWSER_VERSION)-$(GOOS)-$(GOARCH)/$(BROWSER_BINARY)
 
 # Deliberate frontend dependency updates require updating frontend/README.md.
 deps:
@@ -10,12 +16,12 @@ deps:
 
 build: deps
 	mkdir -p build/
-	$(GO) build -o build/wolfnode ./cmd/wolfnode
-	$(GO) build -o build/wolfclient ./cmd/wolfclient
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -o build/wolfnode ./cmd/wolfnode
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -o build/wolfclient ./cmd/wolfclient
 
 node:
 	mkdir -p build/
-	CGO_ENABLED=0 $(GO) build -o build/wolfnode ./cmd/wolfnode
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 $(GO) build -o build/wolfnode ./cmd/wolfnode
 
 clean:
 	rm -f build/wolfclient build/wolfnode
@@ -53,11 +59,11 @@ browser-smoke: browser-test
 	python3 tools/smoke_v05.py --browser "$(BROWSER)"
 
 # Portable application bundle. No system Chromium installation is used.
-renderer: node
-	./build/wolfnode -state-dir "$(CURDIR)/build/package-state" -prepare-renderer -renderer-dir "$(CURDIR)/build/renderer"
+renderer:
+	GOOS=$(HOST_GOOS) GOARCH=$(HOST_GOARCH) CGO_ENABLED=0 $(GO) run ./cmd/wolfnode -state-dir "$(CURDIR)/build/package-state" -prepare-renderer -renderer-platform "$(GOOS)-$(GOARCH)" -renderer-dir "$(CURDIR)/build/renderer"
 
-node-package: renderer
-	tar -czf build/wolfnode-linux-amd64.tar.gz -C build wolfnode renderer
+node-package: node renderer
+	tar -czf build/wolfnode-$(GOOS)-$(GOARCH).tar.gz -C build wolfnode renderer/$(BROWSER_VERSION)-$(GOOS)-$(GOARCH)
 
 production-smoke: build renderer
 	WOLF_NODE_BIN="$(CURDIR)/build/wolfnode" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_PUBLIC_TEST_URL="https://example.com/" WOLF_ARTIFACT_DIR="$(CURDIR)/build/usability" $(GO) test ./internal/production -count=1 -v -timeout 150s

@@ -133,7 +133,10 @@ sandbox-disabled fallback. Runtime trust includes the upstream distribution and
 WolfTunnel's reviewed manifest. Updates require a maintained WolfTunnel release.
 The engine remains a separate sandboxed process, with unchanged egress controls.
 Common Linux runtime libraries, host kernel, user systemd/cgroups and fonts remain
-host dependencies. The current managed runtime supports Linux amd64.
+host dependencies. The managed runtime supports Linux amd64 and ARM64, with
+separate pinned archives and per-file integrity manifests. Both use the same
+namespace, seccomp, cgroup and egress requirements; architecture selection does
+not permit an unsandboxed fallback.
 
 The stable client.log mirrors timestamped safe metadata, bounded to 1 MiB plus
 three backups and subject to retention on startup. It includes handled settings,

@@ -39,7 +39,13 @@ func TestNativeStderrCapturePipeline(t *testing.T) {
 		return
 	}
 	dir := filepath.Join(t.TempDir(), "logs")
-	command := exec.Command(os.Args[0], "-test.run=^TestNativeStderrCapturePipeline$")
+	args := []string{os.Args[0], "-test.run=^TestNativeStderrCapturePipeline$"}
+	// Cross-architecture tests must re-exec through the same user-mode emulator;
+	// no host-wide binfmt registration or privileged test setup is needed.
+	if executor := os.Getenv("WOLF_TEST_EXECUTOR"); executor != "" {
+		args = append([]string{executor}, args...)
+	}
+	command := exec.Command(args[0], args[1:]...)
 	command.Env = append(os.Environ(), "WOLF_NATIVE_LOG_HELPER=1", "WOLF_NATIVE_LOG_DIR="+dir)
 	output, e := command.CombinedOutput()
 	if e != nil {

@@ -20,6 +20,45 @@ modules. Runtime installations must include the matching shared SDL libraries
 and their normal transitive dependencies. Deliberate dependency upgrades should
 update this table, the Makefile, and rerun all frontend checks.
 
+## Native Linux dependencies, including ARM64
+
+Build on the target desktop using its native Go toolchain, compiler and shared
+libraries. The client supports Linux amd64 and ARM64; it needs X11 or Wayland for
+interactive use. A headless SSH node requires none of these SDL dependencies.
+
+If Ubuntu's SDL packages do not match the pinned versions, install build
+prerequisites and build the upstream releases below. These commands install the
+libraries under `/usr/local` on the machine where they are compiled:
+
+```sh
+sudo apt install build-essential pkg-config cmake git libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libfreetype6-dev libharfbuzz-dev
+git clone --depth 1 --branch release-3.4.18 https://github.com/libsdl-org/SDL.git
+cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF
+cmake --build SDL/build --parallel 2
+sudo cmake --install SDL/build
+git clone --depth 1 --branch release-3.2.2 https://github.com/libsdl-org/SDL_ttf.git
+cmake -S SDL_ttf -B SDL_ttf/build -DCMAKE_BUILD_TYPE=Release -DSDLTTF_SAMPLES=OFF -DSDLTTF_PLUTOSVG=OFF
+cmake --build SDL_ttf/build --parallel 2
+sudo cmake --install SDL_ttf/build
+sudo ldconfig
+```
+
+SDL builds the platform window/input backends; SDL_ttf uses FreeType and HarfBuzz
+for the embedded font and text shaping. Return to the WolfTunnel source directory
+and run `make build`, then `./build/wolfclient` from a graphical session.
+The Makefile checks the installed versions. If a distribution has conflicting
+libraries, select the `/usr/local` pkg-config directory before building. Do not
+mix amd64 libraries with an ARM64 compiler. Cross-building the client requires
+`CGO_ENABLED=1`, a target C compiler, and target SDL development/runtime libraries;
+setting `GOARCH` alone is sufficient only for the pure Go `make node` target.
+
+The ARM64 checks use a separately cross-compiled SDL software/dummy backend under
+QEMU. This exercises native C/Go pixel decoding and input, but does not establish
+real ARM desktop GPU/Wayland performance. See the
+[ARM64 validation report](../doc/ARM64-2026_10_26.md).
+
+## Frontend behavior
+
 Build from the repository root with `make build`. SDL calls stay on the main OS
 thread. Network jobs return completions to the UI thread; configuration changes
 and disconnects invalidate stale completions. Closing a request tab cancels its
@@ -73,7 +112,7 @@ Browser screenshot smoke has a 25-second deadline and its test a 40-second paren
 deadline. Source node JPEG and native BMP are saved separately in `build/v0.5/`.
 The viewport texture is clipped below trusted native controls; coordinate mapping
 accounts for letterboxing/DPR 1, and resize notifications coalesce over 100 ms.
-See the [v0.5 report](../docs/USABILITY-2026_10_25.md).
+See the [ARM64 and v0.5 regression report](../doc/ARM64-2026_10_26.md).
 
 New client defaults use `~/.local/share/wolftunnel/client` and the stable diagnostic
 path `~/.local/share/wolftunnel/logs/client.log`. First launch opens Settings;

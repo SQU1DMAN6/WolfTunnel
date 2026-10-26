@@ -26,6 +26,9 @@ import (
 //go:embed runtime-lock.json
 var manifestJSON []byte
 
+//go:embed runtime-lock-linux-arm64.json
+var arm64ManifestJSON []byte
+
 type Manifest struct {
 	Version       string            `json:"version"`
 	Platform      string            `json:"platform"`
@@ -37,13 +40,26 @@ type Manifest struct {
 	Source        string            `json:"source"`
 }
 
-func Lock() Manifest {
+// ManifestFor selects an explicitly reviewed runtime. It never asks a remote
+// service for the latest engine or substitutes an engine for another CPU.
+func ManifestFor(platform string) (Manifest, error) {
+	var data []byte
+	switch platform {
+	case "linux-amd64":
+		data = manifestJSON
+	case "linux-arm64":
+		data = arm64ManifestJSON
+	default:
+		return Manifest{}, fmt.Errorf("RENDERER_PLATFORM_UNSUPPORTED: %s (supported: linux-amd64, linux-arm64)", platform)
+	}
 	var m Manifest
-	if json.Unmarshal(manifestJSON, &m) != nil {
+	if json.Unmarshal(data, &m) != nil || m.Platform != platform || m.Files[m.Binary] != m.BinarySHA256 {
 		panic("invalid renderer build manifest")
 	}
-	return m
+	return m, nil
 }
+
+func Lock() (Manifest, error) { return ManifestFor(runtime.GOOS + "-" + runtime.GOARCH) }
 
 type Installation struct{ Binary, SHA256, Version string }
 
@@ -52,7 +68,7 @@ var ErrIntegrity = errors.New("RENDERER_INTEGRITY_FAILED")
 const maxArchive = 256 << 20
 const maxUnpacked = 768 << 20
 
-func Directory(base string) string { m := Lock(); return filepath.Join(base, m.Version+"-"+m.Platform) }
+func directory(base string, m Manifest) string { return filepath.Join(base, m.Version+"-"+m.Platform) }
 func result(dir string, m Manifest) Installation {
 	return Installation{filepath.Join(dir, filepath.FromSlash(m.Binary)), m.BinarySHA256, m.Version}
 }
@@ -61,12 +77,18 @@ func result(dir string, m Manifest) Installation {
 // existing package fails closed instead of silently trusting a different engine.
 // archivePath allows offline provisioning from the same pinned archive.
 func Ensure(ctx context.Context, base, archivePath string) (Installation, error) {
+	return EnsureFor(ctx, base, archivePath, runtime.GOOS+"-"+runtime.GOARCH)
+}
+
+// EnsureFor permits offline cross-architecture release provisioning. Normal node
+// startup always uses Ensure, selecting only the executing node's architecture.
+func EnsureFor(ctx context.Context, base, archivePath, platform string) (Installation, error) {
 	if ctx.Err() != nil {
 		return Installation{}, ctx.Err()
 	}
-	m := Lock()
-	if runtime.GOOS+"-"+runtime.GOARCH != m.Platform {
-		return Installation{}, errors.New("RENDERER_PLATFORM_UNSUPPORTED")
+	m, e := ManifestFor(platform)
+	if e != nil {
+		return Installation{}, e
 	}
 	if e := storage.Dir(base); e != nil {
 		return Installation{}, e
@@ -91,7 +113,7 @@ func Ensure(ctx context.Context, base, archivePath string) (Installation, error)
 		}
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	dir := Directory(base)
+	dir := directory(base, m)
 	if _, e = os.Lstat(dir); e == nil {
 		if e = verify(ctx, dir, m); e != nil {
 			return Installation{}, e
@@ -290,18 +312,21 @@ func verify(ctx context.Context, dir string, m Manifest) error {
 
 // Bundled finds an optional verified runtime next to a release executable.
 func Bundled(ctx context.Context) (Installation, bool, error) {
+	m, e := Lock()
+	if e != nil {
+		return Installation{}, false, e
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		return Installation{}, false, e
 	}
 	base := filepath.Join(filepath.Dir(exe), "renderer")
-	dir := Directory(base)
+	dir := directory(base, m)
 	if _, e = os.Lstat(dir); os.IsNotExist(e) {
 		return Installation{}, false, nil
 	} else if e != nil {
 		return Installation{}, true, e
 	}
-	m := Lock()
 	if e = verify(ctx, dir, m); e != nil {
 		return Installation{}, true, e
 	}

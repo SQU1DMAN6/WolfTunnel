@@ -1,4 +1,5 @@
-doc/
+doc/*
+!doc/ARM64-2026_10_26.md
 build/wolfclient
 build/wolfnode
 *.test
@@ -11,3 +12,4 @@ build/package-state/
 build/wolfnode-*.tar.gz
 
 build/v0.5/
+build/arm64/
