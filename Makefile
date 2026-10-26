@@ -1,9 +1,10 @@
-.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke
+.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke install-sandbox-policy
 GO ?= go
 GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
 HOST_GOOS = $(shell $(GO) env GOHOSTOS)
 HOST_GOARCH = $(shell $(GO) env GOHOSTARCH)
+NODE_GROUP ?= $(shell id -gn)
 BROWSER_MANIFEST = internal/renderer/runtime-lock$(if $(filter arm64,$(GOARCH)),-linux-arm64,).json
 BROWSER_VERSION = $(shell sed -n 's/  "version": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
 BROWSER_BINARY = $(shell sed -n 's/  "binary": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
@@ -22,6 +23,17 @@ build: deps
 node:
 	mkdir -p build/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 $(GO) build -o build/wolfnode ./cmd/wolfnode
+
+# Explicit administrator action on Ubuntu/AppArmor hosts; never part of a build.
+# Invoke as the node account, not sudo make: its group gets launcher access.
+install-sandbox-policy:
+	test "$$(id -u)" -ne 0
+	test -x /usr/bin/bwrap
+	sudo apparmor_parser --skip-kernel-load --skip-read-cache packaging/apparmor/wolftunnel-bwrap
+	sudo install -d -o root -g root -m 0755 /usr/local/libexec/wolftunnel
+	sudo install -o root -g "$(NODE_GROUP)" -m 0750 /usr/bin/bwrap /usr/local/libexec/wolftunnel/bwrap
+	sudo install -o root -g root -m 0644 packaging/apparmor/wolftunnel-bwrap /etc/apparmor.d/wolftunnel-bwrap
+	sudo apparmor_parser -r /etc/apparmor.d/wolftunnel-bwrap
 
 clean:
 	rm -f build/wolfclient build/wolfnode

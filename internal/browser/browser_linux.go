@@ -139,10 +139,26 @@ func StartObserved(parent context.Context, c Config, p *browsernet.Proxy, observ
 		return nil, StartFailure(stage, "BROWSER_ROOT_FORBIDDEN", "")
 	}
 	checkpoint("isolation_tools")
-	for _, tool := range []string{"bwrap", "systemd-run", "systemctl"} {
+	for _, tool := range []string{"systemd-run", "systemctl"} {
 		if _, e := exec.LookPath(tool); e != nil {
 			return nil, StartFailure(stage, "BROWSER_TOOL_MISSING", "Unavailable tool: "+tool)
 		}
+	}
+	launcher, launcherErr := selectLauncher()
+	if launcherErr != nil {
+		var typed *startupError
+		if errors.As(launcherErr, &typed) {
+			return nil, launcherErr
+		}
+		return nil, StartFailure(stage, "BROWSER_TOOL_MISSING", "Unavailable tool: bwrap")
+	}
+	checkpoint("launcher_policy")
+	policy, policyErr := launcherPolicy(parent, launcher)
+	if observe != nil {
+		observe(policy)
+	}
+	if policyErr != nil {
+		return nil, policyErr
 	}
 	checkpoint("renderer_integrity")
 	file, e := os.Open(c.Binary)
@@ -198,7 +214,7 @@ func StartObserved(parent context.Context, c Config, p *browsernet.Proxy, observ
 		cancel()
 		return nil, StartFailure(stage, "BROWSER_IPC_FAILED", "")
 	}
-	args := []string{"--user", "--scope", "--quiet", "--unit=" + b.scope, "-p", "MemoryMax=" + strconv.Itoa(c.MemoryMB) + "M", "-p", "MemorySwapMax=0", "-p", "TasksMax=" + strconv.Itoa(c.Tasks), "-p", "CPUQuota=" + strconv.Itoa(c.CPUPercent) + "%", "-p", "RuntimeMaxSec=1800", "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64", "--proc", "/proc", "--dev", "/dev", "--dir", "/etc"}
+	args := []string{"--user", "--scope", "--quiet", "--unit=" + b.scope, "-p", "MemoryMax=" + strconv.Itoa(c.MemoryMB) + "M", "-p", "MemorySwapMax=0", "-p", "TasksMax=" + strconv.Itoa(c.Tasks), "-p", "CPUQuota=" + strconv.Itoa(c.CPUPercent) + "%", "-p", "RuntimeMaxSec=1800", launcher, "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64", "--proc", "/proc", "--dev", "/dev", "--dir", "/etc"}
 	for _, path := range []string{"/etc/fonts", "/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/ld.so.cache"} {
 		if _, e := os.Stat(path); e == nil {
 			args = append(args, "--ro-bind", path, path)

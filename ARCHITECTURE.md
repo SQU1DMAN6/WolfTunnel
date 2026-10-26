@@ -213,3 +213,17 @@ the generic wire error while node logs keep the specific cause. The native UI
 and client log use the same fixed advice catalog. `wolfnode -diagnose-browser`
 exercises the production launcher/sandbox and a private blank JPEG without
 requiring a client or binding the public service port.
+
+On AppArmor-restricted Ubuntu hosts, an explicit `make install-sandbox-policy`
+administrator action installs a root-owned, group-executable copy of bwrap at
+`/usr/local/libexec/wolftunnel/bwrap` and a per-path userns compatibility profile.
+The node validates ownership/permissions of this file and its parent directories
+before automatically selecting it. It probes the launcher's exec-time AppArmor
+label with a bounded, non-namespace `--args`/`--version` invocation. Known restricted
+unconfined execution gets a concrete setup error before the failing sandbox launch.
+The profile is inherited by the helper/Chromium to allow nested user namespaces;
+it does not add restrictive AppArmor confinement. The existing namespaces,
+capability drop, cgroups, egress validation and Chromium sandbox verification stay
+mandatory. The global restricted-userns sysctl and distro bwrap policy are unchanged.
+New node-local policy errors map to existing wire categories for diagnostic-capable
+clients; existing v0.5 clients can continue using the protocol unchanged.

@@ -1,0 +1,14 @@
+# Root-owned, group-executable copy of the distribution's bubblewrap.
+# This compatibility profile grants user-namespace creation at one fixed path.
+# Other AppArmor checks are unconfined here; WolfTunnel still enforces its
+# bubblewrap namespaces, capability drop, cgroups and Chromium seccomp sandbox.
+# Keep this profile inherited by the helper and Chromium so nested user
+# namespaces can be created. Do not attach the distro capability-stripping
+# unprivileged_userns subprofile to these children.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile wolftunnel-bwrap /usr/local/libexec/wolftunnel/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/wolftunnel-bwrap>
+}

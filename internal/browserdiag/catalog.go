@@ -5,6 +5,8 @@ package browserdiag
 type Advice struct{ Summary, Remedy string }
 
 var catalog = map[string]Advice{
+	"BROWSER_APPARMOR_SETUP_REQUIRED":  {"AppArmor would deny the sandbox launcher's namespace capabilities.", "As the normal node account, run make install-sandbox-policy once (uses sudo only to install/load the dedicated policy), then retry without sudo. Keep AppArmor enabled."},
+	"BROWSER_LAUNCHER_UNSAFE":          {"The dedicated sandbox launcher has unsafe permissions or is inaccessible.", "Reinstall with make install-sandbox-policy as the node account. The launcher and parent directories must be root-owned, non-writable by group/others, and executable by the node group."},
 	"BROWSER_CONFIG_INVALID":           {"The node browser configuration is invalid.", "Restore valid browser.json limits; total_memory_mb must cover max_sessions times memory_mb."},
 	"BROWSER_ROOT_FORBIDDEN":           {"The node tried to run the browser as root.", "Run wolfnode as an ordinary login account using its systemd user service."},
 	"BROWSER_TOOL_MISSING":             {"A required node isolation tool is missing from PATH.", "Install bubblewrap and systemd, and ensure bwrap, systemd-run and systemctl are on the node service PATH."},
@@ -17,7 +19,7 @@ var catalog = map[string]Advice{
 	"BROWSER_CGROUP_UNAVAILABLE":       {"The node could not create its resource-limited systemd scope.", "Check systemctl --user status, cgroup v2 and delegated memory/pids/cpu controllers. Use a host or VM that permits user scopes."},
 	"BROWSER_DEPENDENCY_MISSING":       {"A shared library needed by the renderer or isolation launcher is missing.", "Check the missing library named in node.log and install its matching native-architecture runtime package. Installing the other CPU architecture's libraries will not fix this."},
 	"BROWSER_RUNTIME_INCOMPATIBLE":     {"The renderer requires an unavailable runtime library ABI.", "Use a supported native distribution/runtime, or a reviewed renderer built for this host. Check the GLIBC/GLIBCXX version in node.log."},
-	"BROWSER_NAMESPACE_DENIED":         {"The host denied creation of a browser sandbox namespace.", "Check AppArmor denials, unprivileged user namespaces and container restrictions. Allow bubblewrap and Chromium's nested user/PID/network namespaces in the relevant host profiles; keep sandboxing enabled."},
+	"BROWSER_NAMESPACE_DENIED":         {"The host denied creation of a browser sandbox namespace.", "Check AppArmor denials and host namespace policy. For Ubuntu unprivileged_userns setpcap/net_admin denials, run make install-sandbox-policy as the node account, then retry without sudo. Other namespace restrictions need host administrator changes; keep sandboxing enabled."},
 	"BROWSER_SANDBOX_FILESYSTEM":       {"The browser sandbox could not prepare its private filesystem.", "Check bwrap mount permissions, runtime file access and host/container mount restrictions. The node account must be able to read the renderer and helper."},
 	"BROWSER_SANDBOX_REJECTED":         {"Chromium did not confirm both its namespace and seccomp sandboxes.", "Check the host kernel's seccomp/user-namespace support and AppArmor profiles for the managed renderer. Do not use --no-sandbox or run it as root."},
 	"BROWSER_MEMORY_LIMIT":             {"The browser hit a memory limit during startup.", "Free host memory, close other sessions, or raise memory_mb and total_memory_mb together within the host budget. Check the parent user/service memory limit too."},
@@ -31,6 +33,20 @@ var catalog = map[string]Advice{
 }
 
 func Lookup(code string) (Advice, bool) { a, ok := catalog[code]; return a, ok }
+
+// The original diagnostics capability promises the established wire categories.
+// New local subcategories keep their detail in node.log/the diagnostic command
+// and use a compatible category for already deployed v0.5 clients.
+func PeerCode(code string) string {
+	switch code {
+	case "BROWSER_APPARMOR_SETUP_REQUIRED":
+		return "BROWSER_NAMESPACE_DENIED"
+	case "BROWSER_LAUNCHER_UNSAFE":
+		return "BROWSER_BINARY_INVALID"
+	default:
+		return code
+	}
+}
 func Message(code string) string {
 	a, ok := Lookup(code)
 	if !ok {

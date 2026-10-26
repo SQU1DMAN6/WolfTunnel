@@ -91,6 +91,8 @@ func (m *Manager) fail(w *wire, id v3.ID, client, code string) {
 	m.log("browser_error", client, id, code)
 	if _, specific := browserdiag.Lookup(code); specific && !w.startupDiagnostics {
 		code = "BROWSER_START_FAILED"
+	} else {
+		code = browserdiag.PeerCode(code)
 	}
 	_ = w.send(v3.Error, id, v3.Control{Code: code})
 }

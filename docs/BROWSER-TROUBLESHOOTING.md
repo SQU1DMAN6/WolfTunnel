@@ -5,6 +5,86 @@ work. Browser processes start separately when a browsing session opens. Installi
 runtime packages does not establish a working systemd user session, namespace
 permission or sufficient process/memory limits.
 
+## Ubuntu AppArmor denies setpcap or net_admin
+
+If the kernel journal shows all of the following at the browser failure time:
+
+```text
+comm="bwrap" profile="unprivileged_userns"
+apparmor="DENIED" operation="capable" capname="setpcap"
+apparmor="DENIED" operation="capable" capname="net_admin"
+```
+
+the initial blocker is established: Ubuntu's restricted user-namespace profile
+denies the capabilities bubblewrap needs to prepare its sandbox and private
+loopback interface. Chromium has not reached its private control connection.
+Installing browser libraries does not supply this AppArmor permission.
+
+From the updated repository, **as the ordinary node account**, run:
+
+```sh
+make node
+make install-sandbox-policy
+./build/wolfnode -diagnose-browser
+```
+
+The explicit policy installation uses sudo for these administrator-owned items:
+
+- `/usr/local/libexec/wolftunnel/bwrap`: a copy of the distribution's
+  `/usr/bin/bwrap`, owned by root, mode 0750, executable by the invoking account's
+  primary group (`NODE_GROUP` can select the service account's group).
+- `/etc/apparmor.d/wolftunnel-bwrap`: a root-owned, mode-0644 profile copied from
+  [the shipped policy](../packaging/apparmor/wolftunnel-bwrap).
+- `apparmor_parser -r`: loads that profile after a non-loading syntax check.
+
+The node automatically selects this dedicated launcher when installed. It checks
+the launcher's and parent directories' root ownership, permissions and lack of
+symlinks; it rejects setuid/setgid launchers and a helper its account cannot
+execute. If the dedicated path is absent, the system bwrap path remains available
+for hosts whose policy already supports it. An unsafe installed helper is rejected
+instead of silently falling back.
+
+The profile is attached to that fixed root-controlled executable path. It permits
+user namespaces, including Chromium's nested sandbox, while leaving the
+distribution's `/usr/bin/bwrap` and its AppArmor rules unchanged. The named profile
+uses `flags=(unconfined)` for other AppArmor operations: it provides a scoped
+namespace compatibility allowance, **not** extra AppArmor containment. Filesystem/
+network namespaces, capability dropping, cgroups, validating egress and Chromium's
+verified namespace/seccomp sandboxes remain the browsing security boundaries.
+Group members who can execute the private launcher can also invoke it directly;
+choose the node account's group deliberately.
+
+No global AppArmor/sysctl setting is changed. Normal builds and node startup do
+not perform this privileged installation. The distribution's bubblewrap package
+updates do not refresh a copied executable automatically; rerun
+`make install-sandbox-policy` after updating bubblewrap. Administrator policies
+that additionally confine the node's service may need their own review.
+
+After the diagnostic succeeds, stop the old foreground node and launch
+`./build/wolfnode` without sudo. If the service uses `/usr/local/bin/wolfnode`,
+deploy the rebuilt executable there and restart that user service:
+
+```sh
+sudo install -m 0755 build/wolfnode /usr/local/bin/wolfnode
+systemctl --user restart wolfnode.service
+```
+
+Continue using the original non-root state/identity. Running a diagnostic as root
+is rejected before opening state or provisioning a runtime; it cannot validate
+the ordinary account's environment.
+
+The diagnostic `launcher_policy` checkpoint now records whether the dedicated
+launcher is selected and its known AppArmor label. It inspects `/proc` while
+bwrap is held in argument parsing, then lets a bounded `--version` invocation exit
+without creating a namespace. When restricted unconfined execution would enter
+`unprivileged_userns`, it reports `BROWSER_APPARMOR_SETUP_REQUIRED` and the install
+command. An unavailable/unknown label proceeds to the actual sandbox check; it
+is not treated as proof that permission was granted.
+
+The approach follows the upstream [Chromium per-path userns allowance](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
+The [AppArmor restricted-userns profile](https://gitlab.com/apparmor/apparmor/-/raw/master/profiles/apparmor.d/unprivileged_userns)
+explicitly denies capabilities, matching the supplied kernel evidence.
+
 ## Get the actual failure
 
 Update both node and client to this revision. On the node, rebuild with `make node`
@@ -79,6 +159,8 @@ input, page content or environment value is copied into these diagnostics.
 |---|---|---|
 | `BROWSER_USER_SESSION_UNAVAILABLE` | systemd-run could not contact the user bus | After installing `dbus-user-session`/`libpam-systemd`, log out of SSH and log back in as the node account. Run `systemctl --user status` without sudo. Use the user service and lingering for operation after logout. An already-open SSH shell may retain the old environment. |
 | `BROWSER_NAMESPACE_DENIED` | Namespace/sandbox creation was denied or unavailable | Inspect kernel/AppArmor denials and the container's namespace policy. The host must allow bubblewrap and Chromium's nested user, PID and network namespaces. Adjust the relevant application profiles with the host administrator. |
+| `BROWSER_APPARMOR_SETUP_REQUIRED` (node-local) | The launcher would enter the capability-stripping restricted-userns profile | Install the dedicated policy with `make install-sandbox-policy` as the ordinary node account; retry the diagnostic without sudo. See the Ubuntu steps above. |
+| `BROWSER_LAUNCHER_UNSAFE` (node-local) | Dedicated launcher ownership/permissions or group access is invalid | Reinstall the launcher/policy and verify root-owned, non-writable parents and executable access for the node group. |
 | `BROWSER_CGROUP_UNAVAILABLE` | systemd rejected scope creation or resource properties | Verify the user manager, cgroup v2 and delegated memory/pids/cpu controllers. A restricted container may need host-side delegation or a suitable VM. Check systemd's unit error in the journal. |
 | `BROWSER_DEPENDENCY_MISSING` | The dynamic loader named a missing shared library | Read the library basename in `evidence`; install its native ARM64 or amd64 runtime package. For example, `libnss3.so` comes from `libnss3`, `libgbm.so.1` from `libgbm1`, and `libasound.so.2` from `libasound2t64` on Ubuntu 24.04+. |
 | `BROWSER_RUNTIME_INCOMPATIBLE` | A required GLIBC/GLIBCXX symbol version was unavailable | Use a renderer and runtime built for the distribution's ABI. Keep the distribution maintained; avoid copying individual libc files from another OS. |

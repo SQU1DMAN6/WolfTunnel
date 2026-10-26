@@ -41,9 +41,28 @@ use a suitably configured Linux host or VM instead of disabling the sandbox.
 Ubuntu's [AppArmor policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/#apparmor-unprivileged-user-namespace-restrictions)
 can also restrict these namespaces. The host policy must allow bubblewrap and
 Chromium's nested namespace sandbox, including creation of the private network
-namespace. An administrator should check AppArmor denials and adjust the relevant
-application profiles if necessary. Keep AppArmor enabled; WolfTunnel does not
-change the host's security policy or fall back to an unsandboxed browser.
+namespace. If the kernel journal reports `profile="unprivileged_userns"` denying
+`setpcap` or `net_admin` for `bwrap`, install WolfTunnel's scoped launcher policy
+once, from this repository **as the normal node account**:
+
+```sh
+make install-sandbox-policy
+```
+
+This explicit installation uses sudo to copy the distribution's `bwrap` to a
+root-owned, group-executable WolfTunnel path and load its AppArmor profile. It
+leaves AppArmor enabled and keeps other applications' bwrap policy unchanged.
+Ordinary builds/startup never install or load host policy. Keep the node running
+as its normal account. Rerun this installation after upgrading bubblewrap so the
+private copy receives the distribution's fixes. If the service account uses a
+different group, specify `NODE_GROUP=that_group`. The helper's parent directories
+must be root-owned and have no group/other write permission.
+
+The profile permits user namespaces for this launcher and its helper/Chromium
+children; it is a compatibility allowance, not an additional restrictive
+AppArmor sandbox. WolfTunnel continues to enforce its own namespaces, capability
+drop, resource limits and verified Chromium namespace/seccomp sandbox. See
+[the exact policy and troubleshooting steps](docs/BROWSER-TROUBLESHOOTING.md#ubuntu-apparmor-denies-setpcap-or-net_admin).
 
 An SSH login is enough for the node: keep `dbus-user-session` and `libpam-systemd`
 installed and log in as the node account so its systemd user manager is available.

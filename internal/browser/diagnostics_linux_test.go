@@ -24,6 +24,8 @@ func TestStartupFailureClassificationAndRedaction(t *testing.T) {
 		timeout       bool
 		stage, code   string
 	}{
+		{"bwrap: capset failed: Operation not permitted", "", false, "cdp_version", "BROWSER_NAMESPACE_DENIED"},
+		{"bwrap: Failed RTM_NEWLINK: Operation not permitted", "", false, "cdp_version", "BROWSER_NAMESPACE_DENIED"},
 		{"bwrap: Creating new namespace failed: Permission denied", "", false, "cdp_version", "BROWSER_NAMESPACE_DENIED"},
 		{"Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted", "", false, "cdp_version", "BROWSER_NAMESPACE_DENIED"},
 		{"Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined", "", false, "cdp_version", "BROWSER_USER_SESSION_UNAVAILABLE"},

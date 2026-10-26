@@ -88,6 +88,8 @@ func classifyStartup(stage, output string, timedOut bool, scopeEvidence string, 
 		code, evidence = "BROWSER_USER_SESSION_UNAVAILABLE", "systemd-run could not connect to the user bus."
 	case strings.Contains(lower, "failed to start transient scope") || strings.Contains(lower, "failed to set unit properties") || strings.Contains(lower, "failed to create cgroup"):
 		code, evidence = "BROWSER_CGROUP_UNAVAILABLE", "systemd rejected the transient scope or its resource properties."
+	case strings.Contains(lower, "bwrap:") && (strings.Contains(lower, "capset failed") || strings.Contains(lower, "setting up loopback") || strings.Contains(lower, "failed rtm_newlink")) && (strings.Contains(lower, "permission denied") || strings.Contains(lower, "operation not permitted")):
+		code, evidence = "BROWSER_NAMESPACE_DENIED", "bubblewrap was denied namespace-local capability or loopback setup. If the kernel journal names unprivileged_userns with setpcap/net_admin, install the WolfTunnel AppArmor launcher policy."
 	case strings.Contains(lower, "creating new namespace failed") || strings.Contains(lower, "failed to move to new namespace") || strings.Contains(lower, "failed to unshare") || strings.Contains(lower, "no permissions to create") || strings.Contains(lower, "no usable sandbox") || strings.Contains(lower, "userns_create"):
 		code, evidence = "BROWSER_NAMESPACE_DENIED", "Namespace/sandbox creation was denied or unavailable; AppArmor/kernel/container policy must be checked on the host."
 	case strings.Contains(lower, "bwrap:") && (strings.Contains(lower, "mount") || strings.Contains(lower, "bind") || strings.Contains(lower, "mkdir")):

@@ -49,6 +49,15 @@ func run() error {
 	codeOnly := flag.Bool("code-only", false, "with -issue-enrolment, emit a raw code instead of a complete invitation")
 	browserHash := flag.String("browser-sha256", "", "expected browser executable SHA-256")
 	flag.Parse()
+	if os.Geteuid() == 0 && !*prepare && !*issue && *revoke == "" {
+		err := browser.StartFailure("node_account", "BROWSER_ROOT_FORBIDDEN", "Root browser startup is rejected before opening state or provisioning a runtime. Re-run as the original node account.")
+		d := browser.Diagnosis(err)
+		browser.RecordDiagnostic(nil, d, "", "")
+		if *diagnose {
+			_ = json.NewEncoder(os.Stdout).Encode(d)
+		}
+		return err
+	}
 	if *diagnose && (*prepare || *issue || *revoke != "") {
 		return fmt.Errorf("-diagnose-browser cannot be combined with administrative operations")
 	}
