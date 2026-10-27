@@ -367,7 +367,7 @@ func (u *ui) helpDraw() {
 	w, h := u.width, u.height
 	rect(16, 142, w-32, h-270, 0x25374a)
 	headline(32, 160, w-64, "WolfTunnel v0.6", accent)
-	value := "Webpages run on your trusted node. This client displays pixels and sends browser input over verified TLS. Sites see the node IP; logins and fingerprinting can still identify you."
+	value := "Webpages run on your trusted node. This client displays pixels and sends browser input over verified TLS. Sites see the node IP; logins and fingerprinting can still identify you.\n\nThat's the boring stuff. WolfTunnel is THE go-to private browser part of the FtR Project, written by Quan Thai.\nHope you enjoy. Happy browsing."
 	if u.help == "docs" {
 		value = strings.TrimSpace(guide)
 	}
@@ -375,7 +375,7 @@ func (u *ui) helpDraw() {
 		value = "Verification is a website response, not a connection failure. Click the page to direct keyboard input there; use pointer movement, dragging, scrolling, Tab and text normally. Page state remains within this browser session. WolfTunnel does not solve challenges, guarantee website acceptance or restore site cookies after a disconnect."
 	}
 	if u.help == "security" {
-		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. TLS hides browsing contents, while network timing and volume remain visible. Details: docs/THREAT_MODEL-v0_6.md."
+		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. TLS hides browsing contents, while network timing and volume remain visible. More details at docs/THREAT_MODEL-v0_6.md on the GitHub repo."
 	}
 	u.wrapped(32, 211, w-64, value, ink, max(1, (h-390)/22))
 	u.button(w-160, h-176, 122, 34, "Close", "help-close")
