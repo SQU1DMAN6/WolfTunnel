@@ -137,7 +137,7 @@ func (u *ui) draw() {
 	}
 	text(166, h-29, max(0, w-330), status, muted)
 	if u.m.Verified {
-		text(w-300, h-29, 130, fmt.Sprintf("Verified · %d ms", u.m.RTT.Milliseconds()), accent)
+		text(w-300, h-29, 250, fmt.Sprintf("Verified · %d ms", u.m.RTT.Milliseconds()), accent)
 	}
 	if u.menu != "" {
 		u.menuDraw()
