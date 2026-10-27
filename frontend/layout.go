@@ -137,7 +137,7 @@ func (u *ui) draw() {
 	}
 	text(166, h-29, max(0, w-330), status, muted)
 	if u.m.Verified {
-		text(w-145, h-29, 130, fmt.Sprintf("Verified · %d ms", u.m.RTT.Milliseconds()), accent)
+		text(w-300, h-29, 130, fmt.Sprintf("Verified · %d ms", u.m.RTT.Milliseconds()), accent)
 	}
 	if u.menu != "" {
 		u.menuDraw()
@@ -180,7 +180,7 @@ func (u *ui) requestDraw() {
 	defer func() { setClip(0, 0, 0, 0); u.clipped = false }()
 	end := top + 246
 	if t.State == "Ready" && t.Result.Status == 0 && t.Result.Code == "" {
-		headline(left, top, cardW, "A request starts here", ink)
+		headline(left, top, cardW, "WolfTunnel Starts Here.", ink)
 		prompt := "Enter a URL or search above."
 		if u.m.Connection != "Connected" {
 			prompt = "Connect a node, then enter a URL or search above."
@@ -301,7 +301,7 @@ func (u *ui) settingsDraw() {
 	if u.m.Client.Config.ClientID != "" {
 		text(left, y, width, "Enrolled · "+u.m.Client.Config.Expires.Local().Format("valid until 2 Jan 2006"), accent)
 		y += 35
-		u.button(left, y, 120, 34, "Test", "ping")
+		u.button(left, y, 120, 34, "Ping and Reconnect", "ping")
 		u.button(left+132, y, 120, 34, "Renew", "renew")
 		u.button(left+264, y, 130, 34, "Disconnect", "disconnect")
 		y += 48
