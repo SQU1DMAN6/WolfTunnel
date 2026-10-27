@@ -28,4 +28,10 @@ func TestViewportCoordinatesAndPhysicalKeys(t *testing.T) {
 			t.Fatalf("unsupported physical key %s", scan)
 		}
 	}
+	if code, key := physicalKey("A", 'ä'); code != "KeyA" || key != "ä" {
+		t.Fatal("logical layout key lost", code, key)
+	}
+	if !localShortcut('l') || localShortcut('a') {
+		t.Fatal("page shortcuts intercepted")
+	}
 }

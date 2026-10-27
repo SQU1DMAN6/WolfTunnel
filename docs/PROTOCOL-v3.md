@@ -1,4 +1,4 @@
-# WolfTunnel v3 (application v0.5)
+# WolfTunnel v3 (application v0.5 / v0.6)
 
 v0 and v2 remain unchanged. Browser channels use a dedicated 48-byte big-endian
 header: ASCII `WolfTunnelv3` (12), version 3 (1), message type (1), flags (2),
@@ -75,3 +75,22 @@ refresh (default two seconds) and explicit FRAME_REFRESH restore complete state.
 Explicit controlled-test screenshots are artifacts,
 not operational logging. Audio, uploads, downloads, local clipboard/profile
 sharing and arbitrary host control are excluded.
+
+## v0.6 input capability and transport
+
+Nodes advertise `input-v06` in NODE_IDENTITY. Only when present does a client
+send optional `repeat: true` on key_down or a `kind: "pinch"` input with viewport
+x/y and relative `scale` (0.25–4). Other input kinds cannot carry nonzero scale;
+repeat is invalid on key_up/text. All numeric fields must be finite; coordinates,
+UTF-8, length and modifier/code allowlists remain validated. Unknown fields
+still fail strict decoding. A new client omits the extension for old nodes;
+old clients ignore the extra advertised capability and retain original inputs.
+The authentication capability list remains `browser-start-diagnostics` only;
+`input-v06` adds no authorization or signature schema. Wire version stays 3.
+
+Direct TCP and explicit HTTP/HTTPS CONNECT carry these exact same TLS-protected
+frames. CONNECT is setup outside node TLS, not a new Wolf wire protocol. Each
+role gets its own tunnel and TLS-exporter-bound proof. The client independently
+checks node TLS/pin after every connector returns. There is no raw framed
+plaintext mode. Local `CONTROL_STREAM_FAILED` and `PIXEL_STREAM_FAILED` diagnoses
+are client-side categories and are not new server error schema fields.

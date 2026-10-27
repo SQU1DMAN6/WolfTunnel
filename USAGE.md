@@ -48,7 +48,15 @@ and near expiry. To revoke an installation, run `wolfnode -revoke CLIENT_ID` und
 the node account, using the same state location as its service.
 
 Private state uses 0700 directories and 0600 files. Preserve it across restarts.
-Browser state is temporary and disappears when its session closes. Public ports
+Browser state is temporary and disappears when its session closes. **End session**
+closes it while retaining installation credentials; reconnect to browse again. Public ports
 80/443 are supported; internal destinations are blocked. Audio, file transfer and
 clipboard/profile sharing are unavailable. TLS protects contents; traffic timing
 and volume, website logins and fingerprinting remain visible. The node is trusted.
+
+If your network requires an approved HTTP/HTTPS proxy, select **http-connect**
+and enter its address in Settings. Otherwise keep **tls-tcp**. Node pinning
+remains mandatory; policy denial and TLS interception cannot be fixed by retrying.
+No direct fallback or proxy authentication is supported. Settings diagnostics
+and the client log show the failed stage. Pinch zoom works where SDL supplies
+native pinch events; fractional horizontal/vertical scrolling is supported.

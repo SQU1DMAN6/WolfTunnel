@@ -1,4 +1,4 @@
-# WolfTunnel v0.5 architecture
+# WolfTunnel v0.6 architecture
 
 The client renders trusted native controls and remote image textures. The node
 executes the webpage. Web content cannot paint the native toolbar, execute local
@@ -34,6 +34,49 @@ command, plus a one-second idle authorisation sweep. Losing either channel
 tears down the browser; reconnecting creates fresh state. Existing invitation
 and credential lifetimes remain 30 and 90 days respectively. Certificate
 rotation still requires explicit owner verification.
+
+## Connection establishment and supported transports
+
+`internal/transport.Connector` returns a TLS stream; application framing and
+Ed25519 authorization remain in nodeclient/protocol. One connector serves v2
+setup/diagnostics and both v3 roles. A second check at the application boundary
+requires a completed TLS 1.3 handshake, the configured leaf SHA-256 pin and valid
+certificate dates regardless of the connector implementation.
+
+`tls-tcp` resolves and connects directly. `http-connect` resolves/connects only
+the explicitly configured HTTP(S) proxy, requests CONNECT for the node authority,
+and runs the same pinned node TLS inside the tunnel. HTTPS proxies first require
+ordinary system-root/hostname validation (TLS >=1.2). CONNECT does not convert
+Wolf frames to HTTP requests or disguise their purpose. Both roles still use
+distinct TCP connections to the same node listener, default 13300. This retains
+existing deployments; a separate frame listener adds no tested benefit here.
+
+Transport defaults: 20-second overall connection budget; DNS, TCP, CONNECT and
+TLS stages each at most five seconds within that budget; two establishment
+retries (three total tries), validated range zero to three. Delay starts at
+200 ms and doubles with 0.8–1.2 jitter. Only transient establishment failures
+retry. Identity failures, denied/auth-required proxies, protocol, authorization
+and browser actions do not retry or replay. Browser startup retains a bounded
+90-second orchestration budget for the configurable node startup/result/attach
+path. Normal channel writes remain five seconds; control/pixel reads are bounded
+at 30/15 seconds. Losing a channel ends the disposable session. Reconnection
+uses saved installation credentials and creates a new browser; no page action
+is silently replayed.
+
+Attempt records contain a random correlation ID, role, selected transport, state,
+failure checkpoint, retry number and elapsed milliseconds. UI progress uses a
+bounded generation-filtered channel, separate from worker completions. DNS,
+TCP refusal/timeout, proxy, TLS, pin, negotiation, authorization, startup and
+stream failures have distinct safe explanations. Proxy responses/bodies and
+arbitrary network errors never become log text. Logs do not diagnose a specific
+filter vendor from a timeout alone.
+
+No PAC/environment proxy discovery, proxy authentication, SOCKS, XVPN, VPN,
+WebSocket camouflage, HTTP/2 or protocol fallback is implemented. Proxy URLs
+cannot contain credentials, paths, queries or fragments; CONNECT response headers
+are bounded to 16 KiB, 64 lines and 4 KiB per line. The configured tunnel must be
+approved by its network operator. An inspecting replacement certificate fails
+the node pin; adding an inspection root cannot change that property.
 
 ## Browser and network boundaries
 
@@ -118,7 +161,12 @@ content dimensions subsequently drive the remote viewport, excluding trusted
 controls/status. The 1920×1200 preset is within default limits. Resize events
 coalesce over 100 ms, update the existing browser, receive an acknowledgement and
 force a complete refresh. Letterboxing has an inverse CSS-coordinate mapping.
-High-DPI native text remains rendered at the native output scale.
+High-DPI native text remains rendered at the native output scale. One in-flight resize and one
+pending replacement supersede older requests. Acknowledgement gates the next
+request and prevents an old A-sized frame completing an A→B→A burst. One blur releases held input before
+the burst, and new position-dependent inputs are paused until an image matches
+the latest requested size; intermediate acknowledgements/images cannot realign
+input to an obsolete frame.
 
 CDP captures the selected webpage viewport as quality-controlled JPEG. Equal
 captures are hash-suppressed between configurable full refreshes. Every sent
@@ -134,6 +182,17 @@ coalesces; key/button/text/wheel events preserve urgent ordering. Overflow close
 the session rather than losing a release. Blur, tab changes and closure release
 held keys/buttons. Physical key events and committed Unicode text are separate;
 Enter includes Chromium's character semantics for ordinary form submission.
+A pending real movement is flushed before urgent button/key transitions, and
+Chromium receives the held button identity during moves, allowing text selection.
+Printable SDL key values preserve layout-specific logical keys; committed text
+continues through SDL text input. Key repeat and pinch are advertised through
+`input-v06`; a new client strips repeat fields/rejects pinch on older nodes.
+Fractional horizontal and vertical wheel deltas remain floats. Native pinch
+begin/update/end is cancelled by blur, menus, leaving/minimizing the window or
+session termination. Relative scale updates use fixed Page.getLayoutMetrics /
+Emulation.setPageScaleFactor calls, bounded to 1–5x. This works in desktop
+headless Chromium where a synthetic touch pinch acknowledged success without
+zooming. Pointer-anchored pan/focal-point preservation is not implemented.
 
 Binary decoders validate sizes and JPEG/PNG dimensions before allocating image
 surfaces. Textures are bounded and updated on the SDL thread; page pixels are
@@ -150,6 +209,7 @@ rendered as text and never logged. Explicit `-metadata` preserves the v2 UI.
 | `internal/browser` | Linux isolation, scoped CDP, tabs, input, capture, process limits |
 | `internal/browsernet` | Per-session validating egress proxy and socket limits |
 | `internal/pixelstream` | Binary metadata and bounded image validation/decode |
+| `internal/transport` | Explicit direct/CONNECT establishment, deadlines, retry/state diagnostics |
 | `internal/nodeclient` | Pinned channels, persistent RPC, event/frame queues, measurements |
 | `frontend/input.go`, `viewport.go`, `remote.go` | SDL coordinates/textures, input, remote model lifecycle |
 | Existing auth/identity/storage/audit/fetch | Preserved v0.2 foundations |
@@ -161,8 +221,8 @@ include destination hosts but omit paths and queries. Files rotate at 1 MiB,
 seven-day retention by default, maximum 64 files; protected backups may outlive
 retention. Capture artifacts exist only through explicit capture/test requests.
 
-See [THREAT_MODEL-v0_5.md](docs/THREAT_MODEL-v0_5.md) and the
-[validation report](doc/ARM64-2026_10_26.md) for tested boundaries
+See [THREAT_MODEL-v0_6.md](docs/THREAT_MODEL-v0_6.md) and the
+[validation report](doc/IMPLEMENTATION-v0_6-2026_10_27.md) for tested boundaries
 and remaining limits. Audio, file transfer, clipboard sync, accessibility and
 production packaging need separate work.
 

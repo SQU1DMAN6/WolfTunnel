@@ -134,3 +134,32 @@ func TestStartupCodesCrossProtocolButRawMessagesDoNot(t *testing.T) {
 		t.Fatal("raw error allowed")
 	}
 }
+
+type fragmentWriter struct{ bytes.Buffer }
+
+func (w *fragmentWriter) Write(p []byte) (int, error) { return w.Buffer.Write(p[:min(3, len(p))]) }
+
+type fragmentReader struct{ *bytes.Reader }
+
+func (r fragmentReader) Read(p []byte) (int, error) { return r.Reader.Read(p[:min(2, len(p))]) }
+func TestPartialReadWriteAndGestureBounds(t *testing.T) {
+	w := &fragmentWriter{}
+	f := Frame{Type: InputEvent, Sequence: 1, Payload: Encode(Control{Tab: NewID().String(), Input: &Input{Kind: "text", Text: "✓ Привет 日本語"}})}
+	if e := Write(w, f); e != nil {
+		t.Fatal(e)
+	}
+	got, e := Read(fragmentReader{bytes.NewReader(w.Bytes())}, false)
+	if e != nil || !bytes.Equal(got.Payload, f.Payload) {
+		t.Fatal("fragmented stream", e)
+	}
+	for _, i := range []Input{{Kind: "pinch", Scale: 0}, {Kind: "pinch", Scale: 5}, {Kind: "move", Scale: 1}, {Kind: "key_up", Code: "KeyA", Repeat: true}, {Kind: "text", Text: string([]byte{255})}} {
+		if i.Validate(900, 650) == nil {
+			t.Fatal("invalid extension accepted", i.Kind)
+		}
+	}
+	for _, i := range []Input{{Kind: "pinch", X: 80, Y: 90, Scale: 1.025}, {Kind: "wheel", X: 80, Y: 90, DeltaX: 0.25, DeltaY: -0.125}, {Kind: "key_down", Code: "KeyA", Key: "ä", Repeat: true}} {
+		if e := i.Validate(900, 650); e != nil {
+			t.Fatal(e)
+		}
+	}
+}

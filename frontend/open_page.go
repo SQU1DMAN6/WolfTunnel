@@ -19,6 +19,9 @@ import (
 // becomes a bounded snapshot operation; input injection requires a separate flag.
 func (u *ui) openPage(o Options, stage *int, at *time.Time) (bool, error) {
 	if u.m.Connection == "Error" {
+		if e := u.captureDiagnostic(o.Screenshot); e != nil {
+			return false, e
+		}
 		return false, &nodeclient.Error{Code: u.m.ConnectionError}
 	}
 	if *stage == 0 && u.m.Connection == "Connected" {
@@ -36,6 +39,9 @@ func (u *ui) openPage(o Options, stage *int, at *time.Time) (bool, error) {
 	}
 	tab := u.m.Current()
 	if tab.Result.Code != "" {
+		if e := u.captureDiagnostic(o.Screenshot); e != nil {
+			return false, e
+		}
 		return false, &nodeclient.Error{Code: tab.Result.Code}
 	}
 	if tab.Frame == nil || u.view.W <= 0 || u.view.RemoteW <= 0 {

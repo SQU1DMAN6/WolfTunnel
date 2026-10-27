@@ -8,6 +8,7 @@ import (
 	"time"
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/browserdiag"
+	"wolftunnel/internal/transport"
 )
 
 // FailureDetail reports safe useful causes; it never copies untrusted peer text,
@@ -15,6 +16,9 @@ import (
 func FailureDetail(err error) string {
 	if err == nil {
 		return ""
+	}
+	if message := transport.FailureMessage(ErrorCode(err)); message != "" {
+		return message
 	}
 	if advice := browserdiag.Message(ErrorCode(err)); advice != "" {
 		return advice

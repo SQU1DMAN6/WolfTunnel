@@ -41,6 +41,7 @@ type Options struct {
 	SmokeTimeout     time.Duration
 	OpenURL          string
 	InteractionSmoke bool
+	FixtureSmoke     bool
 }
 type control struct {
 	x, y, w, h           int
@@ -49,6 +50,7 @@ type control struct {
 type ui struct {
 	view                                   viewRect
 	remoteFocus                            bool
+	pinchActive                            bool
 	heldButtons                            int
 	textureTab                             string
 	textureSequence                        uint64
@@ -379,6 +381,9 @@ func (u *ui) insert(s string) {
 	u.setValue(string(r))
 }
 func (u *ui) event(e C.WolfEvent) {
+	if int(e._type) == 4 && e.repeat != 0 && e.ctrl != 0 && localShortcut(int(e.key)) {
+		return
+	}
 	if u.remoteEvent(e) {
 		return
 	}
@@ -555,6 +560,18 @@ func (u *ui) action(a string) {
 		}
 	case "quit":
 		u.quit = true
+	case "end-session":
+		u.blurRemote()
+		u.m.EndBrowser()
+	case "verification":
+		u.blurRemote()
+		u.help = "verification"
+	case "transport":
+		if u.fields["transport"] == "http-connect" {
+			u.fields["transport"] = "tls-tcp"
+		} else {
+			u.fields["transport"] = "http-connect"
+		}
 	case "back":
 		u.m.History(-1)
 	case "forward":
@@ -663,6 +680,11 @@ func (u *ui) action(a string) {
 
 func (u *ui) applyForm() error {
 	c := u.m.Client.Config
+	c.Transport = u.fields["transport"]
+	c.Proxy = ""
+	if c.Transport == "http-connect" {
+		c.Proxy = strings.TrimSpace(u.fields["proxy"])
+	}
 	c.Host = strings.TrimSpace(u.fields["host"])
 	c.Port, _ = strconv.Atoi(u.fields["port"])
 	host, port, err := nodeclient.NormalizeEndpoint(c.Host, c.Port)

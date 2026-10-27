@@ -15,6 +15,7 @@ import (
 	"wolftunnel/internal/node"
 	"wolftunnel/internal/nodeclient"
 	"wolftunnel/internal/protocol"
+	"wolftunnel/internal/transport"
 )
 
 func TestResolveNavigationAndSearch(t *testing.T) {
@@ -446,5 +447,27 @@ func TestBrowserStartupMessagesHaveSpecificRemedies(t *testing.T) {
 		if !strings.Contains(ConnectionMessage(code), expected) {
 			t.Fatalf("missing remedy for %s: %s", code, ConnectionMessage(code))
 		}
+	}
+}
+
+func TestConnectionProgressGenerationAndExplicitSessionEnd(t *testing.T) {
+	c, e := nodeclient.Load(filepath.Join(t.TempDir(), "client"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	m := NewModel(c, t.TempDir())
+	defer m.Shutdown()
+	worker := m.observedClient()
+	worker.Observer(transport.Event{State: transport.Authenticating, Channel: "control"})
+	m.Drain()
+	if m.Network.State != transport.Authenticating {
+		t.Fatal("connection progress absent")
+	}
+	m.Client.Config.ClientID = "retained-test-identity"
+	m.EndBrowser()
+	worker.Observer(transport.Event{State: transport.Connected})
+	m.Drain()
+	if m.Network.State != transport.Disconnected || m.Connection != "Disconnected" || m.Current().Frame != nil || m.Client.Config.ClientID != "retained-test-identity" {
+		t.Fatal("stale progress/session state reused")
 	}
 }

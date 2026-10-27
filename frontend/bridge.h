@@ -2,7 +2,7 @@
 #define WOLF_BRIDGE_H
 #include <SDL3/SDL.h>
 #include <stdlib.h>
-typedef struct { int type,key,ctrl,shift,mod,button; float x,y,dx,dy; const char *scan; const char *text; } WolfEvent;
+typedef struct { int type,key,ctrl,shift,mod,button,repeat; float x,y,dx,dy,scale; const char *scan; const char *text; } WolfEvent;
 int wolf_init(const void *font, int length);
 void wolf_destroy(void);
 void wolf_dimensions(int *w,int *h,int *pw,int *ph,float *scale);
@@ -21,6 +21,9 @@ void wolf_click(float x,float y);
 void wolf_input(const char *text);
 void wolf_key(int key,int ctrl);
 void wolf_key_event(int key,int down);
+void wolf_move(float x,float y);
+void wolf_wheel(float x,float y,float dx,float dy);
+void wolf_pinch(float x,float y,int phase,float scale);
 char *wolf_clipboard(void);
 #endif
 int wolf_pixels(const void *data,int width,int height,int pitch);

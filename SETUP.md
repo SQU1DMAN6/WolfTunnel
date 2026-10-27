@@ -254,7 +254,7 @@ last one year and require deliberate identity rotation and new client trust.
 
 ## Connect a Wolf Client and browse
 
-1. Launch a WolfTunnel v0.5 client. First launch opens connection settings; paste
+1. Launch a WolfTunnel v0.6 client. First launch opens connection settings; paste
    the complete invitation and choose **Connect**. If building the desktop client,
    install Go 1.27+, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
    **3.2.2**, then use `make build` and `./build/wolfclient`.
@@ -292,7 +292,43 @@ the browser as root or disable sandboxing to bypass an error.
 
 Sessions are ephemeral: disconnecting discards their browser state. Defaults also
 close idle sessions after two minutes and cap their runtime at 30 minutes. Audio,
-file transfer and clipboard/profile sharing remain outside v0.5. Websites see the
+file transfer and clipboard/profile sharing remain outside v0.6. Websites see the
 node's egress IP; TLS protects browsing contents between client and node, while
 timing, volume, logins and fingerprints still limit anonymity. The node remains
 trusted.
+
+## Managed-network connections
+
+Direct **tls-tcp** is the default. If the client network requires an approved
+explicit proxy, choose **http-connect** in client Settings and enter its
+`http://proxy.example.net:8080` or `https://proxy.example.net:8443` address. Save,
+then connect using the same invitation and verified node certificate pin.
+Alternatively, set it once on the client:
+
+```sh
+wolfclient -transport http-connect -proxy https://proxy.example.net:8443
+```
+
+This saves the choice and opens the client. It requests a standard CONNECT
+tunnel, then verifies the node's TLS 1.3 identity inside it. HTTPS proxies also
+need a certificate trusted by the client's operating system. Proxy credentials,
+PAC, SOCKS, NTLM and Kerberos authentication are unsupported. Environment proxy
+variables are not used. A denied or unavailable proxy never triggers a direct
+fallback. To return to direct connections, select **tls-tcp** in Settings and
+clear the proxy field (or use `-transport tls-tcp -proxy ''`).
+
+Connection establishment has a 20-second default budget, five-second stage
+limits and two bounded retries of transient establishment failures. `-retries 0`
+disables retries; the maximum is three. Authentication, browser actions and
+identity failures are never replayed. A lost stream ends its browser session;
+reconnect and navigate again to begin with fresh website state. **End session**
+also closes the browser while retaining the installation's saved credentials.
+
+A network administrator must approve the node destination, port and application.
+Zscaler deployments can apply routing, endpoint, CONNECT and TLS-inspection
+policies; selecting this transport does not approve an untrusted node. TLS
+inspection that replaces the node certificate is rejected by its pin. Obtain an
+approved policy compatible with end-to-end pinning rather than changing the pin
+to an inspection certificate. Client diagnostics distinguish DNS, TCP, proxy,
+TLS, identity, authentication, browser and display failures; a timeout alone does
+not identify their cause.

@@ -27,7 +27,7 @@ func (m *Model) navigateRemote() error {
 		return &nodeclient.Error{Code: "RESOURCE_LIMIT"}
 	}
 	m.opening = true
-	client := m.Client
+	client := m.observedClient()
 	generation := m.Generation
 	w, h := m.ViewportWidth, m.ViewportHeight
 	if m.streamCancel != nil {
@@ -119,6 +119,7 @@ func (m *Model) drainRemote() bool {
 			case <-m.Remote.Done():
 				m.Remote.Close()
 				m.Remote = nil
+				m.opening = false
 				for _, t := range m.Tabs {
 					t.Frame = nil
 					t.State = "Disconnected"
@@ -162,4 +163,17 @@ func (m *Model) SetViewport(w, h int) {
 	if m.Remote != nil {
 		_ = m.Remote.Resize(w, h)
 	}
+}
+
+func (m *Model) EndBrowser() {
+	m.Disconnect()
+	for _, tab := range m.Tabs {
+		tab.Frame = nil
+		tab.FrameSequence = 0
+		if !tab.Settings {
+			tab.State = "Session ended"
+			tab.Result.Code = ""
+		}
+	}
+	m.Notice = "Browser session ended. Reconnect with saved credentials to start a fresh browser."
 }

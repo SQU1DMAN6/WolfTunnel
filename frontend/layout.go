@@ -10,6 +10,7 @@ import (
 	"wolftunnel/internal/audit"
 	"wolftunnel/internal/nodeclient"
 	"wolftunnel/internal/storage"
+	"wolftunnel/internal/transport"
 )
 
 // All positions use current window content coordinates. No fixed-size render
@@ -46,6 +47,9 @@ func (u *ui) draw() {
 		u.button(132+i*64, 3, 60, 34, label, "menu:"+name)
 	}
 	u.button(w-110, 3, 98, 34, "Settings", "settings")
+	if !u.m.MetadataOnly && w > 780 {
+		u.button(w-260, 3, 138, 34, "End session", "end-session")
+	}
 	count := max(1, min(7, (w-68)/122))
 	if u.m.Active < u.tabStart {
 		u.tabStart = u.m.Active
@@ -94,6 +98,9 @@ func (u *ui) draw() {
 	}
 	if !u.m.MetadataOnly && !u.m.Current().Settings {
 		page := u.m.Current()
+		if u.m.opening || u.m.busy {
+			notice = transport.StateMessage(u.m.Network.State)
+		}
 		if u.m.Connection != "Error" && u.m.RemoteFailureCode == "" {
 			if page.Result.Code != "" {
 				notice = ConnectionMessage(page.Result.Code)
@@ -114,7 +121,21 @@ func (u *ui) draw() {
 	}
 	rect(16, h-24, 6, 6, stateColor)
 	text(32, h-29, 124, u.m.Connection, stateColor)
-	text(166, h-29, max(0, w-330), u.m.Client.Config.Address(), muted)
+	status := u.m.Client.Config.Address()
+	if !u.m.MetadataOnly && u.m.Remote != nil {
+		if u.remoteFocus {
+			status += " · Page keyboard"
+		} else {
+			status += " · Click page to type"
+		}
+		if u.pinchActive {
+			status += " · Pinch"
+		}
+	}
+	if u.m.opening || u.m.busy {
+		status = transport.StateMessage(u.m.Network.State)
+	}
+	text(166, h-29, max(0, w-330), status, muted)
 	if u.m.Verified {
 		text(w-145, h-29, 130, fmt.Sprintf("Verified · %d ms", u.m.RTT.Milliseconds()), accent)
 	}
@@ -231,6 +252,8 @@ func (u *ui) loadForm() {
 	u.fields["port"] = strconv.Itoa(c.Port)
 	u.fields["pin"] = c.Fingerprint
 	u.fields["timeout"] = strconv.Itoa(int(c.Timeout / time.Second))
+	u.fields["transport"] = c.Transport
+	u.fields["proxy"] = c.Proxy
 	// Pending invitation/code fields intentionally survive Apply and tab changes.
 }
 func (u *ui) settingsDraw() {
@@ -290,9 +313,22 @@ func (u *ui) settingsDraw() {
 	u.button(left, y, 230, 34, "Search: "+provider, "search")
 	u.button(left+244, y, 150, 34, "Diagnostics", "details")
 	y += 53
+	mode := u.fields["transport"]
+	if mode == "" {
+		mode = "tls-tcp"
+	}
+	u.button(left, y, min(260, width), 34, "Transport: "+mode, "transport")
+	y += 47
+	if mode == "http-connect" {
+		text(left, y, width, "Approved HTTP(S) proxy · URL without credentials", muted)
+		y += 25
+		u.field(left, y, width, "proxy", u.fields["proxy"], false)
+		y += 50
+	}
 	if u.m.Client.Config.Details {
 		text(left, y, width, "Diagnostics", accent)
 		y += 30
+		y += u.wrapped(left, y, width, fmt.Sprintf("Stage: %s · Channel: %s · Retry: %d", u.m.Network.State, u.m.Network.Channel, u.m.Network.Retry), muted, 2) + 8
 		for _, line := range []string{"Identity: " + u.m.Client.Config.Fingerprint, "Discovered (unverified): " + u.m.Discovered, "Client ID: " + u.m.Client.Config.ClientID, "Last error: " + u.m.ConnectionError, "Client log: " + u.clientLogPath(), fmt.Sprintf("Window: %d × %d · Pixels: %d × %d · Scale: %.2f", w, h, u.pixelWidth, u.pixelHeight, u.dpi)} {
 			y += u.wrapped(left, y, width, line, muted, 2) + 8
 		}
@@ -314,6 +350,7 @@ func (u *ui) menuDraw() {
 	items := map[string][][2]string{"File": {{"New tab", "new"}, {"Close tab", "close-active"}, {"Settings", "settings"}, {"Quit", "quit"}}, "View": {{"Reload request", "reload"}, {"Request details", "request-details"}}, "Connection": {{"Connect", "settings"}, {"Disconnect", "disconnect"}, {"Test connection", "ping"}, {"Node details", "settings"}}, "Help": {{"About WolfTunnel", "help:about"}, {"Security", "help:security"}, {"Documentation", "help:docs"}}}
 	if !u.m.MetadataOnly {
 		items["View"] = [][2]string{{"Reload page", "reload"}}
+		items["View"] = append(items["View"], [2]string{"Verification help", "verification"}, [2]string{"End browser session", "end-session"})
 	}
 	x := 132
 	for i, s := range []string{"File", "View", "Connection", "Help"} {
@@ -329,13 +366,16 @@ func (u *ui) menuDraw() {
 func (u *ui) helpDraw() {
 	w, h := u.width, u.height
 	rect(16, 142, w-32, h-270, 0x25374a)
-	headline(32, 160, w-64, "WolfTunnel v0.5", accent)
+	headline(32, 160, w-64, "WolfTunnel v0.6", accent)
 	value := "Webpages run on your trusted node. This client displays pixels and sends browser input over verified TLS. Sites see the node IP; logins and fingerprinting can still identify you."
 	if u.help == "docs" {
 		value = strings.TrimSpace(guide)
 	}
+	if u.help == "verification" {
+		value = "Verification is a website response, not a connection failure. Click the page to direct keyboard input there; use pointer movement, dragging, scrolling, Tab and text normally. Page state remains within this browser session. WolfTunnel does not solve challenges, guarantee website acceptance or restore site cookies after a disconnect."
+	}
 	if u.help == "security" {
-		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. TLS hides browsing contents, while network timing and volume remain visible. Details: docs/THREAT_MODEL-v0_5.md."
+		value = "Use invitations supplied over a trusted channel. Discovery alone does not verify identity. Client keys are generated automatically and never sent to the node. Codes are single use; renew credentials before expiry. Logs omit codes, signatures, URL paths and queries. TLS hides browsing contents, while network timing and volume remain visible. Details: docs/THREAT_MODEL-v0_6.md."
 	}
 	u.wrapped(32, 211, w-64, value, ink, max(1, (h-390)/22))
 	u.button(w-160, h-176, 122, 34, "Close", "help-close")

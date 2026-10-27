@@ -113,7 +113,7 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		m.fail(w, v3.ID{}, "", "UNSUPPORTED_VERSION")
 		return
 	}
-	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input", "browser-start-diagnostics"}}) != nil {
+	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input", "browser-start-diagnostics", "input-v06"}}) != nil {
 		return
 	}
 	f, a, e := w.read()

@@ -44,6 +44,9 @@ type Entry struct {
 	Remediation string `json:"remediation,omitempty"`
 	Scope       string `json:"scope,omitempty"`
 	ExitStatus  string `json:"exit_status,omitempty"`
+	Transport   string `json:"transport,omitempty"`
+	Channel     string `json:"channel,omitempty"`
+	Retry       int    `json:"retry,omitempty"`
 }
 
 func New(dir string, retention time.Duration) (*Logger, error) {

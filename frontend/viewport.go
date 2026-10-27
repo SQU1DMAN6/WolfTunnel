@@ -27,6 +27,7 @@ func (u *ui) viewportDraw() {
 		u.resizeAt = time.Now().Add(100 * time.Millisecond)
 	}
 	if !u.resizeAt.IsZero() && time.Now().After(u.resizeAt) {
+		u.blurRemote()
 		u.m.SetViewport(desiredW, desiredH)
 		u.resizeAt = time.Time{}
 	}
@@ -80,6 +81,7 @@ func (u *ui) blurRemote() {
 		_ = u.m.SendInput(v3.Input{Kind: "blur"})
 	}
 	u.remoteFocus = false
+	u.pinchActive = false
 	u.heldButtons = 0
 }
 func (u *ui) remoteEvent(e C.WolfEvent) bool {
@@ -87,6 +89,10 @@ func (u *ui) remoteEvent(e C.WolfEvent) bool {
 		return false
 	}
 	typ := int(e._type)
+	if u.menu != "" || u.help != "" {
+		u.blurRemote()
+		return false
+	}
 	mods := 0
 	if int(e.mod)&int(C.SDL_KMOD_ALT) != 0 {
 		mods |= 1
@@ -100,12 +106,37 @@ func (u *ui) remoteEvent(e C.WolfEvent) bool {
 	if int(e.mod)&int(C.SDL_KMOD_SHIFT) != 0 {
 		mods |= 8
 	}
-	if typ == 10 {
+	if typ == 10 || typ == 14 {
 		u.blurRemote()
 		return true
 	}
+	switch typ {
+	case 2, 3, 4, 6, 7, 8, 9, 11, 12, 13:
+	default:
+		return false
+	}
+	if u.m.Remote.Resizing() {
+		u.blurRemote()
+		return typ != 2 || float64(e.y) >= 140
+	}
 	x, y, inside := u.view.CSS(float64(e.x), float64(e.y))
 	switch typ {
+	case 11:
+		if inside {
+			u.pinchActive = true
+			return true
+		}
+	case 12:
+		if u.pinchActive && inside {
+			err := u.m.SendInput(v3.Input{Kind: "pinch", X: x, Y: y, Scale: float64(e.scale)})
+			if err != nil {
+				u.m.Notice = ConnectionMessage(err.Error())
+			}
+			return true
+		}
+	case 13:
+		u.pinchActive = false
+		return true
 	case 2:
 		if !inside {
 			u.blurRemote()
@@ -149,7 +180,7 @@ func (u *ui) remoteEvent(e C.WolfEvent) bool {
 			return false
 		}
 		k := int(e.key)
-		if typ == 4 && e.ctrl != 0 && (k == 'l' || k == 't' || k == 'w' || k == 'q' || k == ',' || k == 'r') {
+		if typ == 4 && e.ctrl != 0 && localShortcut(k) {
 			u.blurRemote()
 			return false
 		}
@@ -165,7 +196,7 @@ func (u *ui) remoteEvent(e C.WolfEvent) bool {
 		if typ == 9 {
 			kind = "key_up"
 		}
-		_ = u.m.SendInput(v3.Input{Kind: kind, Code: code, Key: key, Modifiers: mods})
+		_ = u.m.SendInput(v3.Input{Kind: kind, Code: code, Key: key, Modifiers: mods, Repeat: typ == 4 && e.repeat != 0})
 		return true
 	}
 	return false

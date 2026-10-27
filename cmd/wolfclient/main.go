@@ -32,6 +32,7 @@ func run() (result error) {
 	state := flag.String("state-dir", root, "private client state directory")
 	smoke := flag.Bool("smoke-test", false, "run native input/tab smoke checks and exit")
 	smokeView := flag.String("smoke-view", "request", "final smoke-test view: request, settings or manual")
+	fixtureSmoke := flag.Bool("fixture-smoke", false, "with -browser-smoke, exercise the local v0.6 interaction fixture")
 	browserSmoke := flag.String("browser-smoke", "", "controlled browser fixture URL for timed pixel/input smoke")
 	smokeTimeout := flag.Duration("smoke-timeout", 25*time.Second, "native/browser smoke timeout")
 	metadataOnly := flag.Bool("metadata", false, "legacy v2 metadata-only native UI")
@@ -45,6 +46,9 @@ func run() (result error) {
 	uiScale := flag.Float64("ui-scale", 0, "UI scale: 0 for display DPI, or 0.75–3")
 	host := flag.String("host", "", "node host for command-line setup")
 	port := flag.Int("port", 0, "node port for command-line setup")
+	transportMode := flag.String("transport", "", "tls-tcp or explicitly configured http-connect")
+	proxyURL := flag.String("proxy", "", "approved HTTP(S) CONNECT proxy URL without credentials")
+	retries := flag.Int("retries", -1, "connection establishment retries: 0 to 3")
 	pin := flag.String("pin", "", "out-of-band verified node certificate SHA-256")
 	discover := flag.Bool("discover", false, "print UNVERIFIED public fingerprint and exit")
 	codeFile := flag.String("enrol-code-file", "", "enrol with a private code file; never a command-line secret")
@@ -83,15 +87,6 @@ func run() (result error) {
 	}()
 
 	cli := *discover || *codeFile != "" || *inviteFile != "" || *ping || *target != "" || *renew || *captureURL != "" || *captureBlank
-	if !cli {
-		var width, height int
-		if *windowSize != "" {
-			if n, err := fmt.Sscanf(*windowSize, "%dx%d", &width, &height); err != nil || n != 2 || width < 520 || height < 420 || width > 8192 || height > 8192 {
-				return fmt.Errorf("window size must be 520x420 to 8192x8192")
-			}
-		}
-		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout, OpenURL: *openURL, InteractionSmoke: *interactionSmoke})
-	}
 	c, err := nodeclient.Load(*state)
 	if err != nil {
 		return err
@@ -113,8 +108,31 @@ func run() (result error) {
 	if err != nil {
 		return err
 	}
+	if *transportMode != "" {
+		c.Config.Transport = *transportMode
+	}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "proxy" {
+			c.Config.Proxy = *proxyURL
+		}
+	})
+	if *retries >= 0 {
+		c.Config.Retries = *retries
+	}
 	if err = c.Config.Validate(); err != nil {
 		return err
+	}
+	if err = c.Save(*state); err != nil {
+		return err
+	}
+	if !cli {
+		var width, height int
+		if *windowSize != "" {
+			if n, err := fmt.Sscanf(*windowSize, "%dx%d", &width, &height); err != nil || n != 2 || width < 520 || height < 420 || width > 8192 || height > 8192 {
+				return fmt.Errorf("window size must be 520x420 to 8192x8192")
+			}
+		}
+		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout, OpenURL: *openURL, InteractionSmoke: *interactionSmoke, FixtureSmoke: *fixtureSmoke})
 	}
 	ctx := context.Background()
 	if *inviteFile != "" {

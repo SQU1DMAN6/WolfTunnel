@@ -20,6 +20,7 @@ import (
 	"wolftunnel/internal/node"
 	"wolftunnel/internal/nodeclient"
 	v3 "wolftunnel/internal/protocol/v3"
+	"wolftunnel/internal/transport"
 )
 
 // Delay is applied to each TLS socket read/write at the node, independently on
@@ -110,12 +111,12 @@ func performanceNode(t *testing.T, delay time.Duration) (*node.Server, *nodeclie
 	return s, &c, ctx
 }
 
-type distribution struct{ P50, P95, Max float64 }
+type distribution struct{ P50, P95, P99, Max float64 }
 
 func dist(values []float64) distribution {
 	sort.Float64s(values)
 	n := len(values)
-	return distribution{values[n/2], values[int(math.Ceil(.95*float64(n)))-1], values[n-1]}
+	return distribution{values[n/2], values[int(math.Ceil(.95*float64(n)))-1], values[int(math.Ceil(.99*float64(n)))-1], values[n-1]}
 }
 func TestBrowserLatencyAndBoundedConsumer(t *testing.T) {
 	for _, delay := range []time.Duration{0, 20 * time.Millisecond} {
@@ -191,7 +192,45 @@ func TestBrowserLatencyAndBoundedConsumer(t *testing.T) {
 					t.Fatal("control blocked by visual consumer")
 				}
 			}
-			report := map[string]any{"socket_delay_ms": delay.Milliseconds(), "samples": 24, "viewport": "1920x1080", "first_page_ms": first, "input_visible_ms": dist(latency), "capture_encode_ms": dist(capture), "decode_ms": dist(decode), "client_queue_ms": dist(queue), "node_overhead_ms": dist(dispatch), "browser_dispatch_ms": dist(engine), "control_ack_rtt_ms": dist(rtt), "slow_consumer_pong_ms": time.Since(ping).Seconds() * 1000, "pixel_queue_capacity": cap(b.Frames), "stream": b.Metrics(), "sessions": s.Browser.Count()}
+			pongMS := time.Since(ping).Seconds() * 1000
+			measureSeconds := time.Since(start).Seconds()
+			cleanupStart := time.Now()
+			b.Close()
+			for s.Browser.Count() != 0 && time.Since(cleanupStart) < 4*time.Second {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if s.Browser.Count() != 0 {
+				t.Fatal("session cleanup leak")
+			}
+			cleanupMS := time.Since(cleanupStart).Seconds() * 1000
+			phases := map[string][]float64{}
+			type checkpoint struct {
+				state transport.State
+				at    time.Time
+			}
+			last := map[string]checkpoint{}
+			c.Observer = func(ev transport.Event) {
+				now := time.Now()
+				if prev, ok := last[ev.Attempt]; ok {
+					phases[string(prev.state)] = append(phases[string(prev.state)], float64(now.Sub(prev.at).Microseconds())/1000)
+				}
+				last[ev.Attempt] = checkpoint{ev.State, now}
+			}
+			connectionSamples := []float64{}
+			for n := 0; n < 24; n++ {
+				at := time.Now()
+				if _, e = c.Ping(ctx); e != nil {
+					t.Fatal(e)
+				}
+				connectionSamples = append(connectionSamples, time.Since(at).Seconds()*1000)
+			}
+			phaseStats := map[string]distribution{}
+			for name, samples := range phases {
+				if len(samples) > 0 {
+					phaseStats[name] = dist(samples)
+				}
+			}
+			report := map[string]any{"stage_ms": phaseStats, "authenticated_ping_ms": dist(connectionSamples), "cleanup_ms": cleanupMS, "received_frames_per_second": float64(b.Metrics().Frames) / measureSeconds, "measurement_seconds": measureSeconds, "socket_delay_ms": delay.Milliseconds(), "samples": 24, "viewport": "1920x1080", "first_page_ms": first, "input_visible_ms": dist(latency), "capture_encode_ms": dist(capture), "decode_ms": dist(decode), "client_queue_ms": dist(queue), "node_overhead_ms": dist(dispatch), "browser_dispatch_ms": dist(engine), "control_ack_rtt_ms": dist(rtt), "slow_consumer_pong_ms": pongMS, "pixel_queue_capacity": cap(b.Frames), "stream": b.Metrics(), "sessions": s.Browser.Count()}
 			raw, e := json.MarshalIndent(report, "", "  ")
 			if e != nil {
 				t.Fatal(e)

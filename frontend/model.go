@@ -16,6 +16,7 @@ import (
 	"wolftunnel/internal/enrolment"
 	"wolftunnel/internal/nodeclient"
 	"wolftunnel/internal/protocol"
+	"wolftunnel/internal/transport"
 )
 
 type Snapshot struct {
@@ -45,6 +46,8 @@ type completion struct {
 	input, target string
 }
 type Model struct {
+	Network                                         transport.Event
+	progress                                        chan progressEvent
 	RemoteFailureCode                               string
 	Remote                                          *nodeclient.Browser
 	MetadataOnly                                    bool
@@ -70,7 +73,7 @@ type Model struct {
 }
 
 func NewModel(c nodeclient.Client, root string) *Model {
-	m := &Model{Client: c, Root: root, Connection: "Disconnected", jobs: make(chan completion, 16)}
+	m := &Model{Client: c, Root: root, Connection: "Disconnected", jobs: make(chan completion, 16), progress: make(chan progressEvent, 64)}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.workers = make(chan struct{}, 8)
 	m.ViewportWidth, m.ViewportHeight = 1920, 1080
@@ -183,6 +186,7 @@ func (m *Model) Disconnect() {
 		}
 	}
 	m.Connection = "Disconnected"
+	m.Network = transport.Event{State: transport.Disconnected}
 	m.Verified = false
 	m.RTT = 0
 }
@@ -250,6 +254,9 @@ func (m *Model) ImportInvitation(raw string) (string, error) {
 // ConnectionMessage is the user-facing explanation; structured codes remain in
 // diagnostics. It never includes peer-supplied strings or bearer credentials.
 func ConnectionMessage(code string) string {
+	if message := transport.FailureMessage(code); message != "" {
+		return message
+	}
 	if advice := browserdiag.Message(code); advice != "" {
 		return advice
 	}
@@ -396,7 +403,7 @@ func (m *Model) Navigate() error {
 	t.Title = u.Hostname()
 	ctx, cancel := context.WithCancel(m.ctx)
 	t.cancel = cancel
-	client := m.Client
+	client := m.observedClient()
 	tabID, target := t.ID, t.Target
 	input := t.Input
 	generation := m.Generation
@@ -444,7 +451,7 @@ func (m *Model) Operation(kind, code string) {
 	}
 	m.busy = true
 	generation := m.Generation
-	client := m.Client
+	client := m.observedClient()
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.connectionCancel = cancel
 	if kind != "discover" {
@@ -473,7 +480,8 @@ func (m *Model) Operation(kind, code string) {
 	}()
 }
 func (m *Model) Drain() bool {
-	changed := m.drainRemote()
+	changed := m.drainConnection()
+	changed = m.drainRemote() || changed
 	for {
 		select {
 		case c := <-m.jobs:

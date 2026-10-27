@@ -3,9 +3,11 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"image/png"
 	"io"
 	"net"
@@ -15,15 +17,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"wolftunnel/internal/identity"
 
 	"wolftunnel/internal/browser"
 	"wolftunnel/internal/browsernet"
 	"wolftunnel/internal/node"
 	"wolftunnel/internal/nodeclient"
 	v3 "wolftunnel/internal/protocol/v3"
+	"wolftunnel/internal/testsite"
+	"wolftunnel/internal/transport"
 )
 
 type resolver struct{}
@@ -32,6 +38,15 @@ func (resolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, erro
 	return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 }
 func TestRealTLSBrowserPixelStream(t *testing.T) {
+	for _, proxy := range []bool{false, true} {
+		name := "direct"
+		if proxy {
+			name = "connect_proxy"
+		}
+		t.Run(name, func(t *testing.T) { realTLSBrowserPixelStream(t, proxy) })
+	}
+}
+func realTLSBrowserPixelStream(t *testing.T, useProxy bool) {
 	bin := os.Getenv("WOLF_BROWSER_BIN")
 	if bin == "" {
 		t.Skip("required browser integration target sets WOLF_BROWSER_BIN")
@@ -91,6 +106,14 @@ func TestRealTLSBrowserPixelStream(t *testing.T) {
 	}
 	c.Config.Port = ln.Addr().(*net.TCPAddr).Port
 	c.Config.Fingerprint = s.Fingerprint
+	if useProxy {
+		relay := &testsite.ConnectProxy{Target: ln.Addr().String()}
+		proxy := httptest.NewServer(relay)
+		defer proxy.Close()
+		defer relay.Close()
+		c.Config.Transport = "http-connect"
+		c.Config.Proxy = proxy.URL
+	}
 	code, e := s.Auth.IssueCode()
 	if e != nil {
 		t.Fatal(e)
@@ -213,7 +236,9 @@ func awaitFrame(t *testing.T, b *nodeclient.Browser, predicate func(nodeclient.B
 	}
 }
 
-func TestNativeClientBrowserScreenshot(t *testing.T) {
+func TestNativeClientBrowserScreenshot(t *testing.T) { nativeClientScreenshot(t, false) }
+func TestV06NativeClientInteraction(t *testing.T)    { nativeClientScreenshot(t, true) }
+func nativeClientScreenshot(t *testing.T, v06 bool) {
 	bin, clientBin := os.Getenv("WOLF_BROWSER_BIN"), os.Getenv("WOLF_CLIENT_BIN")
 	if bin == "" || clientBin == "" {
 		t.Skip("required native smoke target sets browser/client binaries")
@@ -230,7 +255,12 @@ func TestNativeClientBrowserScreenshot(t *testing.T) {
 	cfg.SHA256 = hex.EncodeToString(hash.Sum(nil))
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
+	site := &testsite.Site{}
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v06 {
+			site.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(w, `<!doctype html><style>body{margin:0;background:#1555b0;font:20px sans-serif}button{position:absolute;left:20px;top:20px;width:180px;height:70px}input{position:absolute;left:20px;top:120px;width:300px}#label{position:absolute;left:230px;top:25px;color:white}</style><button onclick="document.body.style.background='#15b055'">WOLF REMOTE BROWSER</button><input oninput="document.getElementById('label').textContent=this.value"><div id="label">Pixels from the node</div>`)
 	}))
@@ -288,15 +318,61 @@ func TestNativeClientBrowserScreenshot(t *testing.T) {
 		t.Fatal(e)
 	}
 	command := exec.CommandContext(ctx, clientBin, "-state-dir", clientState, "-browser-smoke", "http://fixture.test/pixels?token=fixture-secret", "-screenshot", filepath.Join(dir, "native-client.bmp"), "-smoke-timeout", "25s")
+	if v06 {
+		command.Args = append(command.Args, "-fixture-smoke", "-window-size", "1100x850")
+	}
 	command.Env = os.Environ()
 	if os.Getenv("WOLF_NATIVE_DISPLAY") != "1" {
 		command.Env = append(command.Env, "SDL_VIDEODRIVER=dummy", "SDL_RENDER_DRIVER=software")
+	}
+	if v06 {
+		sockets, err := exec.Command("ss", "-lntp", "sport = :"+strconv.Itoa(c.Config.Port)+" or sport = :"+strconv.Itoa(fixture.Listener.Addr().(*net.TCPAddr).Port)).CombinedOutput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, "local-listeners.txt"), sockets, 0600)
+		sampling, stopSampling := context.WithCancel(ctx)
+		sampled := make(chan struct{})
+		go func() {
+			defer close(sampled)
+			for {
+				out, _ := exec.CommandContext(sampling, "ss", "-ntp", "sport = :"+strconv.Itoa(c.Config.Port)+" or dport = :"+strconv.Itoa(c.Config.Port)).CombinedOutput()
+				if bytes.Count(out, []byte("ESTAB")) >= 4 {
+					os.WriteFile(filepath.Join(dir, "local-sockets.txt"), out, 0600)
+					return
+				}
+				select {
+				case <-sampling.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		}()
+		defer func() { stopSampling(); <-sampled }()
 	}
 	output, e := command.CombinedOutput()
 	if e != nil {
 		t.Fatalf("native browser smoke: %v\n%s", e, output)
 	}
 	t.Log(string(output))
+	if v06 {
+		endpoints := fmt.Sprintf("node control+pixel=%s\nfixture=%s\n", ln.Addr(), fixture.Listener.Addr())
+		os.WriteFile(filepath.Join(dir, "local-endpoints.txt"), []byte(endpoints), 0600)
+		for label, state := range map[string]string{"client": clientState, "node": root} {
+			for _, name := range []string{label + ".log"} {
+				data, err := os.ReadFile(filepath.Join(state, "logs", name))
+				if err == nil {
+					os.WriteFile(filepath.Join(dir, "fixture-"+name), data, 0600)
+				}
+			}
+		}
+	}
+	if v06 {
+		stats := site.Snapshot()
+		if !stats.Verified || stats.DragMoves == 0 || stats.Value != "WolfTunnel ✓ Привет" || stats.ScrollX <= 0 || stats.ScrollY <= 0 || stats.ViewportH != 622 || stats.Zoom <= 1 {
+			t.Fatalf("native input did not reach page: %+v", stats)
+		}
+	}
 	for _, state := range []string{root, clientState} {
 		paths, _ := filepath.Glob(filepath.Join(state, "logs", "*.jsonl"))
 		for _, p := range paths {
@@ -386,4 +462,80 @@ func attemptAttach(t *testing.T, c nodeclient.Client, id v3.ID) string {
 	send(v3.PixelAttach, 3, id, v3.Control{})
 	_, p = receive()
 	return p.Code
+}
+
+func TestNativeConnectionFailureScreenshot(t *testing.T) {
+	clientBin := os.Getenv("WOLF_CLIENT_BIN")
+	if clientBin == "" {
+		t.Skip("native binary target required")
+	}
+	ln, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	root := filepath.Join(t.TempDir(), "client")
+	c, e := nodeclient.Load(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.Config.Port = port
+	c.Config.Fingerprint = strings.Repeat("0", 64)
+	c.Config.ClientID = identity.ClientID(c.Key.Public().(ed25519.PublicKey))
+	c.Config.Retries = 0
+	if e = c.Save(root); e != nil {
+		t.Fatal(e)
+	}
+	dir := os.Getenv("WOLF_ARTIFACT_DIR")
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	os.MkdirAll(dir, 0700)
+	path := filepath.Join(dir, "connection-failed.bmp")
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, clientBin, "-state-dir", root, "-open", "http://fixture.test/interaction", "-screenshot", path, "-smoke-timeout", "5s")
+	cmd.Env = append(os.Environ(), "SDL_VIDEODRIVER=dummy", "SDL_RENDER_DRIVER=software")
+	output, e := cmd.CombinedOutput()
+	if e == nil || !bytes.Contains(output, []byte("CONNECTION_REFUSED")) {
+		t.Fatalf("failure not reported %v %s", e, output)
+	}
+	if info, e := os.Stat(path); e != nil || info.Size() < 1000 {
+		t.Fatal("missing failure screenshot", e)
+	}
+	data, e := os.ReadFile(filepath.Join(root, "logs", "client.log"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	os.WriteFile(filepath.Join(dir, "connection-failed.log"), data, 0600)
+	if !bytes.Contains(data, []byte(`"stage":"CONNECTING"`)) {
+		t.Fatal("precise failure stage missing")
+	}
+}
+
+func TestV06CancelledBrowserStartup(t *testing.T) {
+	s, c, parent := performanceNode(t, 0)
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	c.Observer = func(ev transport.Event) {
+		if ev.State == transport.InitialisingBrowser {
+			cancel()
+		}
+	}
+	at := time.Now()
+	b, e := c.OpenBrowser(ctx, nodeclient.BrowserOptions{Width: 800, Height: 600})
+	if b != nil {
+		b.Close()
+	}
+	if nodeclient.ErrorCode(e) != "NODE_CANCELLED" || time.Since(at) > 2*time.Second {
+		t.Fatal("startup cancellation stalled", e)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Browser.Count() != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s.Browser.Count() != 0 {
+		t.Fatal("cancelled browser startup leaked session")
+	}
 }

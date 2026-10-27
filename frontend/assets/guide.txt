@@ -9,4 +9,11 @@
 9. Webpages execute on the node; the client displays pixels. Back/Forward navigate remote history. Closing a tab releases its page.
 Ctrl/Cmd+T: new tab; W: close; L: navigation; comma: Settings; Q: quit.
 Diagnostics shows logs and credential details. Scroll for smaller windows.
-Operation and recovery guide: USAGE.md and docs/THREAT_MODEL-v0_5.md in the source.
+Operation and recovery guide: USAGE.md and docs/THREAT_MODEL-v0_6.md in the source.
+
+End session destroys website storage while retaining your installation credentials.
+Settings supports direct tls-tcp or an explicitly approved HTTP/HTTPS CONNECT proxy.
+A replaced node certificate is always rejected. A timeout alone does not identify filtering.
+Click the page to type. Blur, menus, tabs and resize release held keys/buttons.
+Native pinch zoom requires SDL gesture support; wheel scrolling preserves fractional deltas.
+View → Verification help explains normal user interaction with challenge pages.

@@ -1,9 +1,11 @@
 package nodeclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"net"
 	"os"
@@ -12,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	v3 "wolftunnel/internal/protocol/v3"
+	"wolftunnel/internal/transport"
 
 	"wolftunnel/internal/identity"
 
@@ -311,4 +315,240 @@ func TestConnectionRefusalReachesStableLog(t *testing.T) {
 	if !strings.Contains(string(data), "refused") || !strings.Contains(string(data), "enrolment_result") || strings.Contains(string(data), strings.Repeat("b", 64)) {
 		t.Fatal("failure absent or unsafe in stable log", string(data))
 	}
+}
+
+type discoveryConnector struct{}
+
+func (discoveryConnector) Connect(ctx context.Context, e transport.Endpoint, a *transport.Attempt) (*tls.Conn, error) {
+	e.Discovery = true
+	return (transport.Dialer{}).Connect(ctx, e, a)
+}
+func TestConnectorCannotBypassApplicationPinAndProtocolStage(t *testing.T) {
+	s, e := node.Open(filepath.Join(t.TempDir(), "node"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ln, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	c, e := Load(filepath.Join(t.TempDir(), "client"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.Config.Port = ln.Addr().(*net.TCPAddr).Port
+	c.Config.Fingerprint = strings.Repeat("0", 64)
+	c.Connector = discoveryConnector{}
+	if conn, e := c.dial(ctx, c.attempt("control")); ErrorCode(e) != "NODE_IDENTITY_CHANGED" {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatal("connector bypassed application pin", e)
+	}
+	c.Config.Fingerprint = s.Fingerprint
+	code, _ := s.Auth.IssueCode()
+	if e = c.Enrol(ctx, code); e != nil {
+		t.Fatal(e)
+	}
+	// A node without a renderer fails at browser initialization, not TCP/TLS.
+	_, e = c.OpenBrowser(ctx, BrowserOptions{})
+	var failure *transport.Failure
+	if !errors.As(e, &failure) || failure.Stage != transport.InitialisingBrowser || ErrorCode(e) != "BROWSER_UNAVAILABLE" {
+		t.Fatal("protocol failure stage", e, failure)
+	}
+}
+
+func TestInvalidVersionAndInterruptedPixelStream(t *testing.T) {
+	s, e := node.Open(filepath.Join(t.TempDir(), "node"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, mode := range []string{"version", "pixel", "stalled-pixel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+			defer cancel()
+			ln, e := net.Listen("tcp", "127.0.0.1:0")
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer ln.Close()
+			serverDone := make(chan struct{})
+			go func() {
+				defer close(serverDone)
+				raw, e := ln.Accept()
+				if e != nil {
+					return
+				}
+				defer raw.Close()
+				peer := tls.Server(raw, s.TLSConfig())
+				peer.SetDeadline(time.Now().Add(17 * time.Second))
+				stop := context.AfterFunc(ctx, func() { raw.Close() })
+				defer stop()
+				if peer.Handshake() != nil {
+					return
+				}
+				if mode == "version" {
+					if _, err := v3.Read(peer, false); err != nil {
+						return
+					}
+					var buf bytes.Buffer
+					v3.Write(&buf, v3.Frame{Type: v3.NodeIdentity, Sequence: 1, Payload: v3.Encode(v3.Control{Version: 3, Fingerprint: s.Fingerprint})})
+					p := buf.Bytes()
+					p[12] = 99
+					peer.Write(p)
+				} else if mode == "stalled-pixel" {
+					<-ctx.Done()
+				} else {
+					time.Sleep(30 * time.Millisecond)
+				}
+			}()
+			c, e := Load(filepath.Join(t.TempDir(), "client"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			c.Config.Port = ln.Addr().(*net.TCPAddr).Port
+			c.Config.Fingerprint = s.Fingerprint
+			c.Config.ClientID = "fixture"
+			if mode == "version" {
+				_, e = c.OpenBrowser(ctx, BrowserOptions{})
+				var f *transport.Failure
+				if ErrorCode(e) != "UNSUPPORTED_VERSION" || !errors.As(e, &f) || f.Stage != transport.Negotiating {
+					t.Fatal("version diagnosis", e, f)
+				}
+			} else {
+				conn, e := c.dial(ctx, c.attempt("pixel"))
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer conn.Close()
+				b := &Browser{ctx: ctx, cancel: cancel, pixel: &browserPeer{conn: conn}, Events: make(chan BrowserEvent, 1)}
+				at := time.Now()
+				b.wg.Add(1)
+				go b.readPixels()
+				b.wg.Wait()
+				if mode == "stalled-pixel" && (time.Since(at) < 14*time.Second || time.Since(at) > 17*time.Second) {
+					t.Fatal("pixel stall deadline is not bounded at 15 seconds")
+				}
+				select {
+				case event := <-b.Events:
+					if event.Control.Code != "PIXEL_STREAM_FAILED" {
+						t.Fatal(event.Control.Code)
+					}
+				default:
+					t.Fatal("display failure not reported")
+				}
+			}
+			<-serverDone
+		})
+	}
+}
+
+func TestNodeRestartUsesSavedCredentialsAndFreshConnection(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node")
+	s, e := node.Open(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := Load(filepath.Join(t.TempDir(), "client"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var address string
+	for n := 0; n < 2; n++ {
+		bind := "127.0.0.1:0"
+		if address != "" {
+			bind = address
+		}
+		ln, e := net.Listen("tcp", bind)
+		if e != nil {
+			t.Fatal(e)
+		}
+		address = ln.Addr().String()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- s.Serve(ctx, ln) }()
+		c.Config.Port = ln.Addr().(*net.TCPAddr).Port
+		c.Config.Fingerprint = s.Fingerprint
+		if n == 0 {
+			code, _ := s.Auth.IssueCode()
+			if e = c.Enrol(ctx, code); e != nil {
+				cancel()
+				t.Fatal(e)
+			}
+		}
+		if _, e = c.Ping(ctx); e != nil {
+			cancel()
+			t.Fatal(e)
+		}
+		cancel()
+		if e = <-done; e != nil {
+			t.Fatal(e)
+		}
+		if n == 0 {
+			s, e = node.Open(root)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	// No transparent replay of a prior session or browser action after restart.
+	if _, e = c.Ping(context.Background()); ErrorCode(e) != "CONNECTION_REFUSED" {
+		t.Fatal(e)
+	}
+}
+
+func TestAuthenticationTimeoutRetainsStageAndCause(t *testing.T) {
+	s, e := node.Open(filepath.Join(t.TempDir(), "node"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	ln, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		raw, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer raw.Close()
+		peer := tls.Server(raw, s.TLSConfig())
+		peer.SetDeadline(time.Now().Add(2 * time.Second))
+		m, err := protocol.ReadV2(peer)
+		if err != nil {
+			return
+		}
+		p, err := protocol.Decode(m)
+		if err != nil {
+			return
+		}
+		if protocol.WriteV2(peer, protocol.NodeIdentity, protocol.Envelope{RequestID: p.RequestID, Version: 2, Fingerprint: s.Fingerprint}) != nil {
+			return
+		}
+		protocol.ReadV2(peer)
+		var pbyte [1]byte
+		peer.Read(pbyte[:])
+	}()
+	c, e := Load(filepath.Join(t.TempDir(), "client"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.Config.Port = ln.Addr().(*net.TCPAddr).Port
+	c.Config.Fingerprint = s.Fingerprint
+	c.Config.ClientID = "fixture"
+	c.Config.Timeout = time.Second
+	_, e = c.Ping(context.Background())
+	var f *transport.Failure
+	if ErrorCode(e) != "NODE_TIMEOUT" || !errors.As(e, &f) || f.Stage != transport.Authenticating {
+		t.Fatal("auth timeout diagnosis lost", e, f)
+	}
+	<-done
 }

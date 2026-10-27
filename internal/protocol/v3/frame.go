@@ -155,22 +155,30 @@ type Input struct {
 	Key       string  `json:"key,omitempty"`
 	Text      string  `json:"text,omitempty"`
 	Modifiers int     `json:"modifiers,omitempty"`
+	Scale     float64 `json:"scale,omitempty"`
+	Repeat    bool    `json:"repeat,omitempty"`
 }
 
 var keyCode = regexp.MustCompile(`^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2])|Arrow(Left|Right|Up|Down)|Enter|Tab|Backspace|Delete|Escape|Space|Home|End|PageUp|PageDown|Shift(Left|Right)|Control(Left|Right)|Alt(Left|Right)|Meta(Left|Right)|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote|CapsLock|Insert)$`)
 
 func (i Input) Validate(w, h int) error {
-	for _, x := range []float64{i.X, i.Y, i.DeltaX, i.DeltaY} {
+	for _, x := range []float64{i.X, i.Y, i.DeltaX, i.DeltaY, i.Scale} {
 		if math.IsNaN(x) || math.IsInf(x, 0) {
 			return ErrFrame
 		}
+	}
+	if i.Kind != "pinch" && i.Scale != 0 || i.Repeat && i.Kind != "key_down" || !utf8.ValidString(i.Key) {
+		return ErrFrame
 	}
 	if i.Modifiers < 0 || i.Modifiers > 15 || !utf8.ValidString(i.Text) || len(i.Text) > 4096 || len(i.Key) > 64 || strings.ContainsRune(i.Key, 0) {
 		return ErrFrame
 	}
 	switch i.Kind {
-	case "move", "down", "up", "wheel":
+	case "move", "down", "up", "wheel", "pinch":
 		if i.X < 0 || i.Y < 0 || i.X >= float64(w) || i.Y >= float64(h) {
+			return ErrFrame
+		}
+		if i.Kind == "pinch" && (i.Scale < 0.25 || i.Scale > 4) {
 			return ErrFrame
 		}
 		if (i.Kind == "down" || i.Kind == "up") && (i.Button < 1 || i.Button > 3) {

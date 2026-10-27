@@ -233,7 +233,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("WolfTunnel v0.5 node ready on %s\nState: %s\nCurrent node log: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\nReady means TLS listener ready; browser startup is checked when a browser session opens.\n", ln.Addr(), *state, filepath.Join(*state, "logs", "node.log"), s.Fingerprint)
+	fmt.Printf("WolfTunnel v0.6 node ready on %s\nState: %s\nCurrent node log: %s\nCertificate SHA-256: %s\nEnrolment requires an owner-issued code. Browser sessions use protocol v3.\nReady means TLS listener ready; browser startup is checked when a browser session opens.\n", ln.Addr(), *state, filepath.Join(*state, "logs", "node.log"), s.Fingerprint)
 	if err = s.Serve(ctx, ln); err != nil {
 		return err
 	}

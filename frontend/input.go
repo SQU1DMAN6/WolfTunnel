@@ -3,6 +3,7 @@ package frontend
 import (
 	"math"
 	"strings"
+	"unicode"
 
 	v3 "wolftunnel/internal/protocol/v3"
 )
@@ -10,6 +11,10 @@ import (
 type viewRect struct {
 	X, Y, W, H       float64
 	RemoteW, RemoteH int
+}
+
+func localShortcut(key int) bool {
+	return key == 'l' || key == 't' || key == 'w' || key == 'q' || key == ',' || key == 'r'
 }
 
 func (r viewRect) CSS(x, y float64) (float64, float64, bool) {
@@ -25,19 +30,27 @@ func (r viewRect) Local(x, y float64) (float64, float64) {
 func physicalKey(scan string, key int) (string, string) {
 	names := map[string][2]string{"Return": {"Enter", "Enter"}, "Enter": {"Enter", "Enter"}, "Escape": {"Escape", "Escape"}, "Backspace": {"Backspace", "Backspace"}, "Tab": {"Tab", "Tab"}, "Space": {"Space", " "}, "Left": {"ArrowLeft", "ArrowLeft"}, "Right": {"ArrowRight", "ArrowRight"}, "Up": {"ArrowUp", "ArrowUp"}, "Down": {"ArrowDown", "ArrowDown"}, "Home": {"Home", "Home"}, "End": {"End", "End"}, "PageUp": {"PageUp", "PageUp"}, "PageDown": {"PageDown", "PageDown"}, "Delete": {"Delete", "Delete"}, "Insert": {"Insert", "Insert"}, "Left Shift": {"ShiftLeft", "Shift"}, "Right Shift": {"ShiftRight", "Shift"}, "Left Ctrl": {"ControlLeft", "Control"}, "Right Ctrl": {"ControlRight", "Control"}, "Left Alt": {"AltLeft", "Alt"}, "Right Alt": {"AltRight", "Alt"}, "Left GUI": {"MetaLeft", "Meta"}, "Right GUI": {"MetaRight", "Meta"}, "-": {"Minus", "-"}, "=": {"Equal", "="}, "[": {"BracketLeft", "["}, "]": {"BracketRight", "]"}, "\\": {"Backslash", "\\"}, ";": {"Semicolon", ";"}, "'": {"Quote", "'"}, ",": {"Comma", ","}, ".": {"Period", "."}, "/": {"Slash", "/"}, "`": {"Backquote", "`"}}
 	if n, ok := names[scan]; ok {
-		return n[0], n[1]
+		keyValue := n[1]
+		if len([]rune(keyValue)) == 1 && key >= 32 && key <= unicode.MaxRune && !unicode.IsControl(rune(key)) {
+			keyValue = string(rune(key))
+		}
+		return n[0], keyValue
 	}
 	if len(scan) == 1 {
 		ch := scan[0]
 		if ch >= 'A' && ch <= 'Z' {
 			text := strings.ToLower(scan)
-			if key >= 32 && key < 127 {
+			if key >= 32 && key <= unicode.MaxRune && !unicode.IsControl(rune(key)) {
 				text = string(rune(key))
 			}
 			return "Key" + scan, text
 		}
 		if ch >= '0' && ch <= '9' {
-			return "Digit" + scan, scan
+			value := scan
+			if key >= 32 && key <= unicode.MaxRune && !unicode.IsControl(rune(key)) {
+				value = string(rune(key))
+			}
+			return "Digit" + scan, value
 		}
 	}
 	if len(scan) >= 2 && scan[0] == 'F' {

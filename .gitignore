@@ -10,7 +10,7 @@ build/usability/
 build/package-state/
 build/wolfnode-*.tar.gz
 
-build/v0.5/
 build/arm64/
 build/diagnostics/
 build/apparmor/
+build/v0.6/

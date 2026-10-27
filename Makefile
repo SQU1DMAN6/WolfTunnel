@@ -1,4 +1,4 @@
-.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke install-sandbox-policy
+.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke install-sandbox-policy network-test
 GO ?= go
 GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
@@ -9,6 +9,7 @@ BROWSER_MANIFEST = internal/renderer/runtime-lock$(if $(filter arm64,$(GOARCH)),
 BROWSER_VERSION = $(shell sed -n 's/  "version": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
 BROWSER_BINARY = $(shell sed -n 's/  "binary": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
 BROWSER ?= $(CURDIR)/build/renderer/$(BROWSER_VERSION)-$(GOOS)-$(GOARCH)/$(BROWSER_BINARY)
+ARTIFACT_DIR ?= $(CURDIR)/build/v0.6
 
 # Deliberate frontend dependency updates require updating frontend/README.md.
 deps:
@@ -62,13 +63,13 @@ fmt:
 
 browser-test: build renderer
 	@test -x "$(BROWSER)" || (echo 'Set BROWSER to a maintained Chromium executable'; exit 1)
-	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(CURDIR)/build/v0.5" $(GO) test ./internal/browser ./internal/session -count=1 -v -timeout 120s
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/browser ./internal/session -count=1 -v -timeout 120s
 
 browser-native: build renderer
-	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_NATIVE_DISPLAY=1 WOLF_ARTIFACT_DIR="$(CURDIR)/build/v0.5" $(GO) test ./internal/session -run TestNativeClientBrowserScreenshot -count=1 -v -timeout 50s
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_NATIVE_DISPLAY=1 WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run 'TestNativeClientBrowserScreenshot|TestV06NativeClientInteraction' -count=1 -v -timeout 50s
 
 browser-smoke: browser-test
-	python3 tools/smoke_v05.py --browser "$(BROWSER)"
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_NODE_BIN="$(CURDIR)/build/wolfnode" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run '^TestBuiltBinaryBrowserSmoke$$' -count=1 -v -timeout 60s
 
 # Portable application bundle. No system Chromium installation is used.
 renderer:
@@ -79,3 +80,10 @@ node-package: node renderer
 
 production-smoke: build renderer
 	WOLF_NODE_BIN="$(CURDIR)/build/wolfnode" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_PUBLIC_TEST_URL="https://example.com/" WOLF_ARTIFACT_DIR="$(CURDIR)/build/usability" $(GO) test ./internal/production -count=1 -v -timeout 150s
+
+# Requires unprivileged user/network namespaces, ip/tc and tcpdump. The script
+# refuses the initial network namespace and captures only its own loopback tests.
+network-test:
+	mkdir -p "$(ARTIFACT_DIR)"
+	$(GO) test -c -o "$(ARTIFACT_DIR)/transport.test" ./internal/transport
+	sh internal/transport/netem.sh "$(ARTIFACT_DIR)" "$(ARTIFACT_DIR)/transport.test"

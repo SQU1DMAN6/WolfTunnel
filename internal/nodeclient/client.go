@@ -22,6 +22,7 @@ import (
 	"wolftunnel/internal/protocol"
 	v3 "wolftunnel/internal/protocol/v3"
 	"wolftunnel/internal/storage"
+	"wolftunnel/internal/transport"
 )
 
 const Google = "https://www.google.com/search?q={query}"
@@ -36,13 +37,19 @@ type Config struct {
 	Details        bool          `json:"details"`
 	ClientID       string        `json:"client_id,omitempty"`
 	Expires        time.Time     `json:"expires,omitzero"`
+	Transport      string        `json:"transport,omitempty"`
+	Proxy          string        `json:"proxy,omitempty"`
+	Retries        int           `json:"retries"`
 }
 
 func DefaultConfig() Config {
-	return Config{Host: "127.0.0.1", Port: 13300, SearchTemplate: DuckDuckGo, Timeout: 20 * time.Second, Details: false}
+	return Config{Host: "127.0.0.1", Port: 13300, SearchTemplate: DuckDuckGo, Timeout: 20 * time.Second, Details: false, Transport: "tls-tcp", Retries: 2}
 }
 func (c Config) Address() string { return net.JoinHostPort(c.Host, fmt.Sprint(c.Port)) }
 func (c Config) Validate() error {
+	if err := transport.Validate(c.Transport, c.Proxy, c.Retries); err != nil {
+		return err
+	}
 	if c.Host == "" || strings.ContainsAny(c.Host, "/ \t\r\n?@#\\") || c.Port < 1 || c.Port > 65535 || c.Timeout < time.Second || c.Timeout > time.Minute {
 		return &Error{Code: "INVALID_CONFIGURATION"}
 	}
@@ -58,9 +65,11 @@ func (c Config) Validate() error {
 }
 
 type Client struct {
-	Config Config
-	Key    ed25519.PrivateKey
-	Log    *audit.Logger
+	Config    Config
+	Key       ed25519.PrivateKey
+	Log       *audit.Logger
+	Connector transport.Connector
+	Observer  func(transport.Event)
 }
 type Error struct {
 	Code  string
@@ -72,6 +81,9 @@ func (e *Error) Unwrap() error { return e.Cause }
 func ErrorCode(err error) string {
 	if err == nil {
 		return ""
+	}
+	if code := transport.Code(err); code != "" {
+		return code
 	}
 	if errors.Is(err, enrolment.ErrInvitation) {
 		return "INVALID_INVITATION"
@@ -109,7 +121,7 @@ func Load(root string) (Client, error) {
 	if err := storage.Dir(root); err != nil {
 		return Client{}, err
 	}
-	c := Client{}
+	c := Client{Config: Config{Transport: "tls-tcp", Retries: 2}}
 	err := storage.Read(filepath.Join(root, "config.json"), &c.Config)
 	if errors.Is(err, os.ErrNotExist) {
 		c.Config = DefaultConfig()
@@ -176,13 +188,13 @@ func Discover(ctx context.Context, c Config) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}} // public discovery only
-	raw, err := d.DialContext(ctx, "tcp", c.Address())
+	a := transport.NewAttempt("discovery", c.Transport, nil)
+	raw, err := (transport.Dialer{}).Connect(ctx, transport.Endpoint{Host: c.Host, Port: c.Port, Mode: c.Transport, Proxy: c.Proxy, Retries: c.Retries, Discovery: true}, a)
 	if err != nil {
-		return "", &Error{Code: ErrorCode(err)}
+		return "", err
 	}
 	defer raw.Close()
-	return identity.Fingerprint(raw.(*tls.Conn).ConnectionState().PeerCertificates[0].Raw), nil
+	return identity.Fingerprint(raw.ConnectionState().PeerCertificates[0].Raw), nil
 }
 
 type session struct {
@@ -190,6 +202,8 @@ type session struct {
 	binding []byte
 	mu      sync.Mutex
 	log     *audit.Logger
+	attempt *transport.Attempt
+	ctx     context.Context
 }
 
 func messageName(typ byte) string {
@@ -200,7 +214,15 @@ func messageName(typ byte) string {
 	return "UNKNOWN"
 }
 
-func (s *session) send(typ byte, e protocol.Envelope, key ed25519.PrivateKey) error {
+func (s *session) send(typ byte, e protocol.Envelope, key ed25519.PrivateKey) (result error) {
+	defer func() {
+		if result != nil {
+			result = stageFailure(s.attempt, result)
+		}
+	}()
+	if typ == protocol.Authenticate || typ == protocol.EnrolmentRequest {
+		s.attempt.Set(transport.Authenticating)
+	}
 	if key != nil {
 		e.Signature = ed25519.Sign(key, protocol.SigningBytes(s.binding, typ, e))
 	}
@@ -212,19 +234,22 @@ func (s *session) send(typ byte, e protocol.Envelope, key ed25519.PrivateKey) er
 	}
 	return err
 }
-func (s *session) receive(typ byte, id string) (protocol.Envelope, error) {
+func (s *session) receive(typ byte, id string) (out protocol.Envelope, result error) {
+	defer func() {
+		if result != nil {
+			result = stageFailure(s.attempt, result)
+		}
+	}()
 	m, err := protocol.ReadV2(s.conn)
 	if err != nil {
-		code := "NODE_UNREACHABLE"
-		if errors.Is(err, protocol.ErrVersion) {
-			code = "UNSUPPORTED_VERSION"
-		} else if errors.Is(err, protocol.ErrPayload) || errors.Is(err, protocol.ErrInvalidHeader) {
-			code = "PROTOCOL_ERROR"
+		if s.ctx != nil && s.ctx.Err() != nil {
+			err = s.ctx.Err()
 		}
+		code := ErrorCode(err)
 		if s.log != nil {
 			s.log.Log(audit.Entry{Component: "client", Event: "protocol_receive_failed", ID: id, Status: messageName(typ), Code: code})
 		}
-		return protocol.Envelope{}, &Error{Code: code}
+		return protocol.Envelope{}, &Error{Code: code, Cause: err}
 	}
 	e, err := protocol.Decode(m)
 	if err != nil || e.RequestID != id {
@@ -242,6 +267,9 @@ func (s *session) receive(typ byte, id string) (protocol.Envelope, error) {
 	}
 	if m.Type != typ {
 		return e, &Error{Code: "PROTOCOL_ERROR"}
+	}
+	if m.Type == protocol.AuthResult || m.Type == protocol.EnrolmentResult {
+		s.attempt.Finish(nil)
 	}
 	return e, nil
 }
@@ -264,22 +292,13 @@ func (c Client) connect(ctx context.Context) (*session, error) {
 	if c.Config.Fingerprint == "" {
 		return nil, &Error{Code: "NODE_IDENTITY_UNVERIFIED"}
 	}
-	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 || identity.Fingerprint(cs.PeerCertificates[0].Raw) != c.Config.Fingerprint {
-			return &Error{Code: "NODE_IDENTITY_CHANGED"}
-		}
-		cert := cs.PeerCertificates[0]
-		if time.Now().Before(cert.NotBefore) || time.Now().After(cert.NotAfter) {
-			return &Error{Code: "NODE_IDENTITY_EXPIRED"}
-		}
-		return nil
-	}}}
-	raw, err := d.DialContext(ctx, "tcp", c.Config.Address())
+	attempt := c.attempt("metadata")
+	conn, err := c.dial(ctx, attempt)
 	if err != nil {
-		c.trace("tls_connect_failed", "", ErrorCode(err), start)
-		return nil, &Error{Code: ErrorCode(err), Cause: err}
+		return nil, stageFailure(attempt, err)
 	}
-	conn := raw.(*tls.Conn)
+	attempt.Set(transport.Negotiating)
+
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -290,13 +309,13 @@ func (c Client) connect(ctx context.Context) (*session, error) {
 		return nil, err
 	}
 	c.trace("tls_identity_verified", "", "ok", start)
-	s := &session{conn: conn, binding: binding, log: c.Log}
+	s := &session{conn: conn, binding: binding, log: c.Log, attempt: attempt, ctx: ctx}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	id := ID()
 	if err = s.send(protocol.Hello, protocol.Envelope{RequestID: id, Versions: []int{2}}, nil); err != nil {
 		conn.Close()
-		return nil, &Error{Code: "NODE_UNREACHABLE"}
+		return nil, err
 	}
 	e, err := s.receive(protocol.NodeIdentity, id)
 	if err != nil {
@@ -305,7 +324,7 @@ func (c Client) connect(ctx context.Context) (*session, error) {
 	}
 	if e.Version != 2 || e.Fingerprint != c.Config.Fingerprint {
 		conn.Close()
-		return nil, &Error{Code: "PROTOCOL_ERROR"}
+		return nil, stageFailure(attempt, &Error{Code: "PROTOCOL_ERROR"})
 	}
 	c.trace("protocol_negotiated", id, "ok", start)
 	return s, nil
@@ -357,7 +376,7 @@ func (c *Client) Enrol(ctx context.Context, code string) (result error) {
 	defer stop()
 	id := ID()
 	if err = s.send(protocol.EnrolmentRequest, protocol.Envelope{RequestID: id, PublicKey: c.Key.Public().(ed25519.PublicKey), Code: code}, nil); err != nil {
-		return &Error{Code: "NODE_UNREACHABLE"}
+		return err
 	}
 	out, err := s.receive(protocol.EnrolmentResult, id)
 	if err != nil {
@@ -456,13 +475,13 @@ func (c Client) Call(ctx context.Context, typ byte, e protocol.Envelope) (protoc
 	defer stop()
 	id := ID()
 	if err = s.send(protocol.Authenticate, protocol.Envelope{RequestID: id, ClientID: c.Config.ClientID}, c.Key); err != nil {
-		return protocol.Envelope{}, &Error{Code: "NODE_UNREACHABLE"}
+		return protocol.Envelope{}, err
 	}
 	if _, err = s.receive(protocol.AuthResult, id); err != nil {
 		return protocol.Envelope{}, err
 	}
 	if err = s.send(typ, e, c.Key); err != nil {
-		return protocol.Envelope{}, &Error{Code: "NODE_UNREACHABLE"}
+		return protocol.Envelope{}, err
 	}
 	sent.Store(true)
 	expected := map[byte]byte{protocol.HTTPFetch: protocol.HTTPResult, protocol.PingV2: protocol.PongV2, protocol.Renew: protocol.RenewResult}[typ]

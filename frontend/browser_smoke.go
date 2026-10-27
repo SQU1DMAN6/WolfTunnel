@@ -54,6 +54,9 @@ func (u *ui) browserSmoke(o Options, stage *int, clicked *time.Time) (bool, erro
 		*stage = 3
 		return false, nil
 	}
+	if o.FixtureSmoke && *stage >= 3 {
+		return u.fixtureSmoke(o, stage, clicked)
+	}
 	if *stage == 3 && u.m.Remote.LastTextSequence() > 0 && t.RemoteFrame.Update.InputSequence >= u.m.Remote.LastTextSequence() && time.Since(*clicked) > 300*time.Millisecond {
 		C.wolf_key('t', C.SDL_KMOD_CTRL)
 		*stage = 4

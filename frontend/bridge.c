@@ -46,9 +46,11 @@ int wolf_poll(WolfEvent *out) {
  if(event.type==SDL_EVENT_QUIT)out->type=1;
  if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP){out->type=event.type==SDL_EVENT_MOUSE_BUTTON_DOWN?2:8;out->button=event.button.button;out->x=event.button.x;out->y=event.button.y;out->mod=SDL_GetModState();}
  if(event.type==SDL_EVENT_MOUSE_MOTION){out->type=7;out->x=event.motion.x;out->y=event.motion.y;out->mod=SDL_GetModState();}
- if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST)out->type=10;
+ if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_MINIMIZED)out->type=10;
  if(event.type==SDL_EVENT_TEXT_INPUT){out->type=3;out->text=event.text.text;}
- if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP){out->type=event.type==SDL_EVENT_KEY_DOWN?4:9;out->scan=SDL_GetScancodeName(event.key.scancode);out->mod=event.key.mod;out->key=(int)event.key.key;out->ctrl=(event.key.mod&(SDL_KMOD_CTRL|SDL_KMOD_GUI))!=0;out->shift=(event.key.mod&SDL_KMOD_SHIFT)!=0;}
+ if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP){out->type=event.type==SDL_EVENT_KEY_DOWN?4:9;out->scan=SDL_GetScancodeName(event.key.scancode);out->mod=event.key.mod;out->key=(int)event.key.key;out->repeat=event.key.repeat;out->ctrl=(event.key.mod&(SDL_KMOD_CTRL|SDL_KMOD_GUI))!=0;out->shift=(event.key.mod&SDL_KMOD_SHIFT)!=0;}
+ if(event.type==SDL_EVENT_WINDOW_MOUSE_LEAVE)out->type=14;
+ if(event.type==SDL_EVENT_PINCH_BEGIN || event.type==SDL_EVENT_PINCH_UPDATE || event.type==SDL_EVENT_PINCH_END){out->type=event.type==SDL_EVENT_PINCH_BEGIN?11:event.type==SDL_EVENT_PINCH_UPDATE?12:13;out->scale=event.pinch.scale;float x,y;SDL_GetMouseState(&x,&y);SDL_RenderCoordinatesFromWindow(renderer,x,y,&out->x,&out->y);}
  if(event.type==SDL_EVENT_WINDOW_EXPOSED || event.type==SDL_EVENT_WINDOW_RESIZED || event.type==SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type==SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED)out->type=5;
  if(event.type==SDL_EVENT_MOUSE_WHEEL){out->type=6;out->x=event.wheel.mouse_x;out->y=event.wheel.mouse_y;float flip=event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED?-1:1;out->dx=event.wheel.x*flip;out->dy=event.wheel.y*flip;out->mod=SDL_GetModState();}
  return 1;
@@ -88,3 +90,6 @@ void wolf_viewport(float x,float y,float w,float h){if(pixels){SDL_FRect dest={x
 void wolf_mouse(int down,int button,float x,float y){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_MOUSE_BUTTON_DOWN:SDL_EVENT_MOUSE_BUTTON_UP;e.button.windowID=SDL_GetWindowID(window);e.button.button=button;SDL_RenderCoordinatesToWindow(renderer,x,y,&e.button.x,&e.button.y);SDL_PushEvent(&e);}
 
 void wolf_key_event(int key,int down){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;e.key.windowID=SDL_GetWindowID(window);e.key.key=key;e.key.scancode=SDL_GetScancodeFromKey(key,NULL);SDL_PushEvent(&e);}
+void wolf_move(float x,float y){SDL_Event e;SDL_zero(e);e.type=SDL_EVENT_MOUSE_MOTION;e.motion.windowID=SDL_GetWindowID(window);SDL_RenderCoordinatesToWindow(renderer,x,y,&e.motion.x,&e.motion.y);SDL_PushEvent(&e);}
+void wolf_wheel(float x,float y,float dx,float dy){SDL_Event e;SDL_zero(e);e.type=SDL_EVENT_MOUSE_WHEEL;e.wheel.windowID=SDL_GetWindowID(window);SDL_RenderCoordinatesToWindow(renderer,x,y,&e.wheel.mouse_x,&e.wheel.mouse_y);e.wheel.x=dx;e.wheel.y=dy;SDL_PushEvent(&e);}
+void wolf_pinch(float x,float y,int phase,float scale){float wx,wy;SDL_RenderCoordinatesToWindow(renderer,x,y,&wx,&wy);SDL_WarpMouseInWindow(window,wx,wy);SDL_Event e;SDL_zero(e);e.type=phase==0?SDL_EVENT_PINCH_BEGIN:phase==1?SDL_EVENT_PINCH_UPDATE:SDL_EVENT_PINCH_END;e.pinch.windowID=SDL_GetWindowID(window);e.pinch.scale=scale;SDL_PushEvent(&e);}

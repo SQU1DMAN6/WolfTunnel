@@ -1,0 +1,55 @@
+{
+  "browser_dispatch_ms": {
+    "P50": 1.028,
+    "P95": 2.3,
+    "Max": 2.379
+  },
+  "capture_encode_ms": {
+    "P50": 45.596,
+    "P95": 55.631,
+    "Max": 62.123
+  },
+  "client_queue_ms": {
+    "P50": 0.04,
+    "P95": 0.053,
+    "Max": 0.061
+  },
+  "control_ack_rtt_ms": {
+    "P50": 104.014,
+    "P95": 105.997,
+    "Max": 114.04
+  },
+  "decode_ms": {
+    "P50": 13.258,
+    "P95": 14.995,
+    "Max": 15.883
+  },
+  "first_page_ms": 1453.0245260000002,
+  "input_visible_ms": {
+    "P50": 135.03790700000002,
+    "P95": 161.86145699999997,
+    "Max": 179.979256
+  },
+  "node_overhead_ms": {
+    "P50": 0.027,
+    "P95": 0.127,
+    "Max": 0.127
+  },
+  "pixel_queue_capacity": 1,
+  "samples": 24,
+  "sessions": 1,
+  "slow_consumer_pong_ms": 62.712754999999994,
+  "socket_delay_ms": 20,
+  "stream": {
+    "BrowserUS": 887,
+    "Frames": 37,
+    "Bytes": 544954,
+    "Skipped": 11,
+    "InputAcks": 48,
+    "DecodeUS": 15656,
+    "DispatchUS": 44,
+    "InputQueueUS": 10,
+    "RoundTripUS": 62678
+  },
+  "viewport": "1920x1080"
+}

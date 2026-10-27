@@ -121,3 +121,21 @@ are normalised. A bare code requires an independently verified pin. Successful
 connection returns to a page tab. `-open URL` opens a native page after connecting;
 with explicit `-screenshot` it captures and exits under a timeout. The separate
 `-interaction-smoke` flag adds deterministic mouse/physical-key input for testing.
+
+## v0.6 input and diagnostics
+
+SDL committed text remains separate from physical keys. Layout-specific logical
+keys and repeats are forwarded; trusted local shortcuts are consumed once.
+Pointer movement coalesces before release transitions. Focus loss, mouse leave,
+minimize, menus and explicit End session release held input.
+
+The pinned SDL build exposes native pinch events; supported backends forward
+relative scale updates to capable nodes. Fractional two-dimensional wheel values
+remain floats. Physical trackpad hardware and full IME composition need further
+platform tests. The opt-in `-fixture-smoke` path injects SDL events only against
+the controlled fixture; it is not a third-party challenge solver.
+
+Connection progress is delivered through a bounded generation-filtered channel.
+Settings expose explicit direct/HTTP CONNECT transport and safe failure stages.
+Real desktop and dummy/software-renderer captures are produced by the Makefile
+browser targets; screenshots are explicit private artifacts, not routine logs.

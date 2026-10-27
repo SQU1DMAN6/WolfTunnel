@@ -680,6 +680,23 @@ func (b *Browser) Input(ctx context.Context, i v3.Input) error {
 		return b.clearInput(ctx)
 	case "text":
 		return b.cdp.call(ctx, p.CDP, "Input.insertText", map[string]string{"text": i.Text}, nil)
+	case "pinch":
+		// Desktop headless Chromium acknowledges synthetic touch pinches without
+		// zooming. Apply the native gesture's real relative scale through the
+		// fixed page-scale API instead; no page script or touch emulation is used.
+		var metrics struct {
+			CSSVisualViewport struct {
+				Scale float64 `json:"scale"`
+			} `json:"cssVisualViewport"`
+		}
+		if err := b.cdp.call(ctx, p.CDP, "Page.getLayoutMetrics", nil, &metrics); err != nil {
+			return err
+		}
+		scale := metrics.CSSVisualViewport.Scale
+		if scale <= 0 {
+			scale = 1
+		}
+		return b.cdp.call(ctx, p.CDP, "Emulation.setPageScaleFactor", map[string]any{"pageScaleFactor": max(1.0, min(5.0, scale*i.Scale))}, nil)
 	case "key_down", "key_up":
 		typ := "rawKeyDown"
 		b.mu.Lock()
@@ -690,7 +707,7 @@ func (b *Browser) Input(ctx context.Context, i v3.Input) error {
 			b.keys[i.Code] = i
 		}
 		b.mu.Unlock()
-		params := map[string]any{"type": typ, "code": i.Code, "key": i.Key, "modifiers": i.Modifiers, "windowsVirtualKeyCode": virtualKey(i.Code)}
+		params := map[string]any{"type": typ, "code": i.Code, "key": i.Key, "modifiers": i.Modifiers, "windowsVirtualKeyCode": virtualKey(i.Code), "autoRepeat": i.Repeat}
 		// SDL committed-text events exclude Enter. Chromium needs its character
 		// semantics as well as the physical key to submit forms/newlines.
 		if i.Kind == "key_down" && i.Code == "Enter" {
@@ -715,6 +732,15 @@ func (b *Browser) Input(ctx context.Context, i v3.Input) error {
 		}
 		buttons := b.buttons
 		b.mu.Unlock()
+		if i.Kind == "move" {
+			if buttons&1 != 0 {
+				button = "left"
+			} else if buttons&4 != 0 {
+				button = "middle"
+			} else if buttons&2 != 0 {
+				button = "right"
+			}
+		}
 		params := map[string]any{"type": typ, "x": i.X, "y": i.Y, "button": button, "buttons": buttons, "modifiers": i.Modifiers}
 		if i.Kind == "down" || i.Kind == "up" {
 			params["clickCount"] = 1
@@ -748,6 +774,14 @@ func (b *Browser) clearInput(ctx context.Context) error {
 	return nil
 }
 func virtualKey(code string) int {
+	if strings.HasPrefix(code, "F") {
+		if n, e := strconv.Atoi(strings.TrimPrefix(code, "F")); e == nil && n >= 1 && n <= 12 {
+			return 111 + n
+		}
+	}
+	if n, ok := map[string]int{"PageUp": 33, "PageDown": 34, "Insert": 45, "CapsLock": 20, "ShiftLeft": 16, "ShiftRight": 16, "ControlLeft": 17, "ControlRight": 17, "AltLeft": 18, "AltRight": 18, "MetaLeft": 91, "MetaRight": 92, "Minus": 189, "Equal": 187, "BracketLeft": 219, "BracketRight": 221, "Backslash": 220, "Semicolon": 186, "Quote": 222, "Comma": 188, "Period": 190, "Slash": 191, "Backquote": 192}[code]; ok {
+		return n
+	}
 	if len(code) == 4 && strings.HasPrefix(code, "Key") {
 		return int(code[3])
 	}
