@@ -90,6 +90,9 @@ func (u *ui) browserSmoke(o Options, stage *int, clicked *time.Time) (bool, erro
 				return false, e
 			}
 		}
+		if e := u.writePresentationMetrics(o.Screenshot); e != nil {
+			return false, e
+		}
 		metrics := u.m.Remote.Metrics()
 		fmt.Printf("Browser smoke passed: rendered pixels, JavaScript click, international text, tab close/resume; frames=%d bytes=%d capture_us=%d decode_us=%d dispatch_us=%d queue_us=%d\n", metrics.Frames, metrics.Bytes, t.RemoteFrame.Update.CaptureUS, metrics.DecodeUS, metrics.DispatchUS, metrics.InputQueueUS)
 		return true, nil

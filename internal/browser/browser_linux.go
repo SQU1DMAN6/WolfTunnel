@@ -65,34 +65,46 @@ func (c Config) Viewport(w, h int) bool {
 	return w >= 320 && h >= 200 && w <= c.MaxWidth && h <= c.MaxHeight && int64(w)*int64(h) <= int64(c.MaxPixels)
 }
 
-type Page struct{ ID, Target, CDP string }
+type Page struct {
+	ID, Target, CDP string
+	MainFrame       string
+	LinkFrame       string
+	LinkWorld       int
+}
 type Event struct {
+	Kind                            string
 	Tab, State, Code, Title, Target string
 	Status                          int
 }
 type Browser struct {
-	creating      int
-	approved      map[string]bool
-	potential     map[string]bool
-	captureMu     sync.RWMutex
-	Config        Config
-	Proxy         *browsernet.Proxy
-	cmd           *exec.Cmd
-	cdp           *cdp
-	scope         string
-	done          chan struct{}
-	exitError     error
-	ctx           context.Context
-	cancel        context.CancelFunc
-	once          sync.Once
-	mu            sync.Mutex
-	pages         map[string]*Page
-	active        string
-	width, height int
-	contextID     string
-	keys          map[string]v3.Input
-	buttons       int
-	Events        chan Event
+	terminalCode     string
+	hoverEpoch       uint64
+	navigation       bool
+	interceptedClick bool
+	hoverPoints      chan hoverPoint
+	hoverTarget      string
+	creating         int
+	approved         map[string]bool
+	potential        map[string]bool
+	captureMu        sync.RWMutex
+	Config           Config
+	Proxy            *browsernet.Proxy
+	cmd              *exec.Cmd
+	cdp              *cdp
+	scope            string
+	done             chan struct{}
+	exitError        error
+	ctx              context.Context
+	cancel           context.CancelFunc
+	once             sync.Once
+	mu               sync.Mutex
+	pages            map[string]*Page
+	active           string
+	width, height    int
+	contextID        string
+	keys             map[string]v3.Input
+	buttons          int
+	Events           chan Event
 }
 
 func Start(parent context.Context, c Config, p *browsernet.Proxy) (*Browser, error) {
@@ -309,6 +321,8 @@ func StartObserved(parent context.Context, c Config, p *browsernet.Proxy, observ
 	}
 
 	diagnostic.disable()
+	b.hoverPoints = make(chan hoverPoint, 1)
+	go b.hover()
 	go b.events()
 	return b, nil
 }
@@ -371,16 +385,40 @@ func (b *Browser) Close() {
 	})
 }
 func (b *Browser) Done() <-chan struct{} { return b.ctx.Done() }
-func (b *Browser) emit(e Event) {
+func (b *Browser) TerminalCode() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.terminalCode != "" {
+		return b.terminalCode
+	}
+	return "BROWSER_CRASHED"
+}
+func (b *Browser) emit(e Event) bool {
 	select {
 	case b.Events <- e:
+		return true
 	default:
+		if e.Kind == "newtab" {
+			b.mu.Lock()
+			b.terminalCode = "RESOURCE_LIMIT"
+			b.mu.Unlock()
+			b.cancel()
+		}
+		return false
 	}
 }
 func (b *Browser) events() {
 	for {
 		select {
 		case <-b.ctx.Done():
+			return
+		case <-b.cdp.done:
+			if b.cdp.eventOverflow.Load() {
+				b.mu.Lock()
+				b.terminalCode = "RESOURCE_LIMIT"
+				b.mu.Unlock()
+			}
+			b.cancel()
 			return
 		case p := <-b.cdp.events:
 			if p.Method == "Target.targetCreated" {
@@ -420,15 +458,39 @@ func (b *Browser) events() {
 				continue
 			}
 			switch p.Method {
+			case "Page.windowOpen":
+				b.windowOpen(tab, p.Params)
 			case "Page.frameNavigated":
 				var data struct {
 					Frame struct {
+						ID     string `json:"id"`
 						Parent string `json:"parentId"`
 						URL    string `json:"url"`
 					} `json:"frame"`
 				}
 				if json.Unmarshal(p.Params, &data) == nil && data.Frame.Parent == "" && len(data.Frame.URL) <= 8192 && browsernet.Validate(data.Frame.URL) == nil {
+					b.mu.Lock()
+					if page := b.pages[tab]; page != nil {
+						page.MainFrame = data.Frame.ID
+						page.LinkWorld = 0
+						page.LinkFrame = ""
+					}
+					b.mu.Unlock()
 					b.emit(Event{Tab: tab, State: "Loading", Target: data.Frame.URL})
+				}
+			case "Page.navigatedWithinDocument":
+				var change struct {
+					Frame string `json:"frameId"`
+					URL   string `json:"url"`
+				}
+				if json.Unmarshal(p.Params, &change) == nil && browsernet.Validate(change.URL) == nil && len(change.URL) <= 8192 {
+					b.mu.Lock()
+					page := b.pages[tab]
+					main := page != nil && page.MainFrame == change.Frame
+					b.mu.Unlock()
+					if main {
+						b.emit(Event{Tab: tab, State: "Completed", Target: change.URL})
+					}
 				}
 			case "Page.loadEventFired":
 				b.emit(Event{Tab: tab, State: "Completed"})
@@ -501,6 +563,17 @@ func (b *Browser) NewPage(ctx context.Context, id string) error {
 	if e := b.cdp.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": b.contextID}, &target); e != nil {
 		return e
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			b.mu.Lock()
+			delete(b.approved, target.ID)
+			b.mu.Unlock()
+			cleanup, stop := context.WithTimeout(b.ctx, time.Second)
+			defer stop()
+			b.cdp.call(cleanup, "", "Target.closeTarget", map[string]string{"targetId": target.ID}, nil)
+		}
+	}()
 	b.mu.Lock()
 	b.approved[target.ID] = true
 	b.mu.Unlock()
@@ -511,6 +584,7 @@ func (b *Browser) NewPage(ctx context.Context, id string) error {
 		return e
 	}
 	page := &Page{ID: id, Target: target.ID, CDP: attach.ID}
+
 	for _, method := range []string{"Page.enable", "Network.enable"} {
 		if e := b.cdp.call(ctx, page.CDP, method, map[string]any{}, nil); e != nil {
 			return e
@@ -522,6 +596,7 @@ func (b *Browser) NewPage(ctx context.Context, id string) error {
 	b.mu.Lock()
 	b.pages[id] = page
 	b.mu.Unlock()
+	complete = true
 	return nil
 }
 func (b *Browser) page(id string) (*Page, error) {
@@ -675,6 +750,30 @@ func (b *Browser) Input(ctx context.Context, i v3.Input) error {
 	if e != nil {
 		return e
 	}
+	if b.navigationOn() {
+		if i.Kind == "move" {
+			b.queueHover(id, i)
+		}
+		if i.Kind == "up" && i.Button == 1 {
+			b.mu.Lock()
+			suppressed := b.interceptedClick
+			b.interceptedClick = false
+			b.mu.Unlock()
+			if suppressed {
+				return nil
+			}
+		}
+		if i.Kind == "down" && i.Button == 1 && i.Modifiers&(2|4) != 0 {
+			target, err := b.linkAt(ctx, p, i.X, i.Y)
+			if err == nil && target != "" {
+				b.mu.Lock()
+				b.interceptedClick = true
+				b.mu.Unlock()
+				b.newTab(id, target, true)
+				return nil
+			}
+		}
+	}
 	switch i.Kind {
 	case "blur":
 		return b.clearInput(ctx)
@@ -755,6 +854,9 @@ func (b *Browser) Input(ctx context.Context, i v3.Input) error {
 func (b *Browser) clearInput(ctx context.Context) error {
 	b.mu.Lock()
 	p := b.pages[b.active]
+	b.interceptedClick = false
+	b.hoverTarget = ""
+	b.hoverEpoch++
 	held := b.keys
 	b.keys = make(map[string]v3.Input)
 	buttons := b.buttons

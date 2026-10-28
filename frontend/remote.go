@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"wolftunnel/internal/nodeclient"
 	v3 "wolftunnel/internal/protocol/v3"
@@ -50,6 +51,7 @@ func (m *Model) SelectTab(i int) {
 		return
 	}
 	m.Active = i
+	m.LinkTarget = ""
 	t := m.Current()
 	if m.Remote != nil && !t.Settings {
 		if e := m.Remote.Select(t.ID); e != nil {
@@ -72,16 +74,38 @@ func (m *Model) drainRemote() bool {
 					t.Frame = frame.Image
 					t.FrameSequence = frame.Sequence
 					t.RemoteFrame = frame
-					if t.State == "Ready" {
-						t.State = "Completed"
-					}
+
 					break
 				}
 			}
 		case event := <-m.Remote.Events:
 			changed = true
 			c := event.Control
-			if event.Type == v3.Error {
+			if event.Type == v3.LinkStatus {
+				if m.Current().ID == c.Tab {
+					m.LinkTarget = c.Target
+				}
+				continue
+			}
+			if event.Type == v3.NewTabRequest {
+				if c.Code != "" {
+					m.navigationNotice(c.Tab, ConnectionMessage(c.Code), 3*time.Second)
+				} else if err := m.OpenTargetInNewTab(c.Tab, c.Target); err != nil {
+					m.navigationNotice(c.Tab, ConnectionMessage(nodeclient.ErrorCode(err)), 3*time.Second)
+				}
+				continue
+			}
+			if event.Type == v3.Error && event.FailedCreation {
+				for i, t := range m.Tabs {
+					if t.ID == c.Tab {
+						m.CloseTab(i)
+						break
+					}
+				}
+				m.navigationNotice(c.Tab, ConnectionMessage(c.Code), 3*time.Second)
+				continue
+			}
+			if event.Type == v3.Error && c.Tab == "" {
 				m.RemoteFailureCode = c.Code
 				m.Notice = ConnectionMessage(c.Code)
 			}
@@ -91,7 +115,20 @@ func (m *Model) drainRemote() bool {
 				}
 				switch event.Type {
 				case v3.NavigationStatus:
+					if c.State == "Loading" {
+						m.LinkTarget = ""
+						if c.Target != "" && c.Target != t.Target {
+							t.Result.Status = 0
+							t.Result.Code = ""
+						}
+					}
 					t.State = c.State
+					if c.State == "Completed" || c.State == "Cancelled" || c.State == "Failed" {
+						m.LinkTarget = ""
+						if m.NavigationTab == t.ID {
+							m.navigationNotice(t.ID, c.State+" "+statusURL(t.Target), time.Second)
+						}
+					}
 					if c.Target != "" {
 						t.Target, t.Input = c.Target, c.Target
 						if u, e := url.Parse(c.Target); e == nil {
@@ -111,6 +148,9 @@ func (m *Model) drainRemote() bool {
 					}
 				case v3.Error:
 					t.State = "Failed"
+					if c.Code == "TAB_LIMIT" || c.Code == "SESSION_INVALID" {
+						_ = m.Remote.CloseTab(t.ID)
+					}
 					t.Result.Code = c.Code
 				}
 			}
@@ -122,6 +162,8 @@ func (m *Model) drainRemote() bool {
 				m.opening = false
 				for _, t := range m.Tabs {
 					t.Frame = nil
+					t.RemoteFrame = nodeclient.BrowserFrame{}
+					t.FrameSequence = 0
 					t.State = "Disconnected"
 				}
 				m.Notice = "Remote browser disconnected. Reconnect or navigate to start a fresh session."
@@ -169,6 +211,7 @@ func (m *Model) EndBrowser() {
 	m.Disconnect()
 	for _, tab := range m.Tabs {
 		tab.Frame = nil
+		tab.RemoteFrame = nodeclient.BrowserFrame{}
 		tab.FrameSequence = 0
 		if !tab.Settings {
 			tab.State = "Session ended"

@@ -22,7 +22,8 @@ complete `wolftunnel://...` invitation privately. Launch `wolfclient`, paste it 
 Settings and choose **Connect**. Later launches reuse saved credentials.
 
 Enter an HTTP/HTTPS URL and **Go**. Mouse, keyboard, scroll, tabs and resize work
-through the remote browser. Back/Forward navigate history; Stop cancels loading.
+through the remote browser. **Ctrl+click** opens links in another Wolf tab;
+hovered and pending destinations appear along the bottom. Back/Forward navigate history; Stop cancels loading.
 `wolfclient -open https://example.com/` opens a page after connecting.
 
 | Shortcut | Action |
@@ -60,3 +61,7 @@ remains mandatory; policy denial and TLS interception cannot be fixed by retryin
 No direct fallback or proxy authentication is supported. Settings diagnostics
 and the client log show the failed stage. Pinch zoom works where SDL supplies
 native pinch events; fractional horizontal/vertical scrolling is supported.
+
+If authentication succeeds but browsing fails, Settings diagnostics distinguishes
+browser startup, display attachment, first image and local presentation. Match
+the correlation ID with the node log. Reconnecting starts fresh website state.

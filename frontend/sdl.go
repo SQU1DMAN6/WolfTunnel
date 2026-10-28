@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"runtime"
 	"strconv"
@@ -42,12 +43,16 @@ type Options struct {
 	OpenURL          string
 	InteractionSmoke bool
 	FixtureSmoke     bool
+	NavigationSmoke  bool
 }
 type control struct {
 	x, y, w, h           int
 	label, action, field string
 }
 type ui struct {
+	rgba                                   *image.RGBA
+	pendingPresentation                    presentationSample
+	presentationSamples                    []presentationSample
 	view                                   viewRect
 	remoteFocus                            bool
 	pinchActive                            bool
@@ -193,7 +198,13 @@ func Run(o Options) error {
 			}
 		}
 		if o.BrowserSmoke != "" {
-			done, err := u.browserSmoke(o, &browserStage, &clicked)
+			var done bool
+			var err error
+			if o.NavigationSmoke {
+				done, err = u.navigationSmoke(o, &browserStage, &clicked)
+			} else {
+				done, err = u.browserSmoke(o, &browserStage, &clicked)
+			}
 			if err != nil {
 				return err
 			}
@@ -218,7 +229,7 @@ func Run(o Options) error {
 					return errors.New("screenshot failed")
 				}
 			}
-			C.wolf_present()
+			u.present()
 			u.dirty = false
 		}
 		if o.Smoke && frame >= 8 {

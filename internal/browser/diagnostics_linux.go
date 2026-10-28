@@ -23,15 +23,16 @@ import (
 // StartupDiagnostic contains only fixed descriptions, validated dependency names,
 // generated scope IDs and numeric results. It never contains raw process output.
 type StartupDiagnostic struct {
-	Stage      string `json:"stage"`
-	Status     string `json:"status"`
-	Code       string `json:"code,omitempty"`
-	Summary    string `json:"error,omitempty"`
-	Remedy     string `json:"remediation,omitempty"`
-	Evidence   string `json:"evidence,omitempty"`
-	Scope      string `json:"scope,omitempty"`
-	ExitStatus string `json:"exit_status,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
+	Correlation string `json:"correlation,omitempty"`
+	Stage       string `json:"stage"`
+	Status      string `json:"status"`
+	Code        string `json:"code,omitempty"`
+	Summary     string `json:"error,omitempty"`
+	Remedy      string `json:"remediation,omitempty"`
+	Evidence    string `json:"evidence,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	ExitStatus  string `json:"exit_status,omitempty"`
+	DurationMS  int64  `json:"duration_ms"`
 }
 type startupError struct{ diagnostic StartupDiagnostic }
 
@@ -53,7 +54,7 @@ func Diagnosis(err error) StartupDiagnostic {
 }
 func RecordDiagnostic(logger *audit.Logger, d StartupDiagnostic, client, session string) {
 	if logger != nil {
-		logger.Log(audit.Entry{Component: "browser", Event: "browser_start_" + d.Status, Stage: d.Stage, Code: d.Code, Error: d.Summary, Remediation: d.Remedy, Evidence: d.Evidence, Scope: d.Scope, ExitStatus: d.ExitStatus, DurationMS: d.DurationMS, ClientID: client, SessionID: session})
+		logger.Log(audit.Entry{Component: "browser", Event: "browser_start_" + d.Status, Stage: d.Stage, Code: d.Code, Error: d.Summary, Remediation: d.Remedy, Evidence: d.Evidence, Scope: d.Scope, ExitStatus: d.ExitStatus, DurationMS: d.DurationMS, ClientID: client, SessionID: session, Correlation: d.Correlation})
 	}
 	if d.Status == "failed" {
 		log.Printf("Browser startup failed: code=%s stage=%s evidence=%s exit=%s scope=%s. %s %s", d.Code, d.Stage, d.Evidence, d.ExitStatus, d.Scope, d.Summary, d.Remedy)

@@ -104,6 +104,9 @@ func (u *ui) fixtureSmoke(o Options, stage *int, at *time.Time) (bool, error) {
 		if e := capture("native-pinch"); e != nil {
 			return false, e
 		}
+		if e := u.writePresentationMetrics(o.Screenshot); e != nil {
+			return false, e
+		}
 		fmt.Printf("v0.6 local SDL fixture passed: frames=%d input_acks=%d viewport=%dx%d\n", u.m.Remote.Metrics().Frames, u.m.Remote.Metrics().InputAcks, u.view.RemoteW, u.view.RemoteH)
 		return true, nil
 	}

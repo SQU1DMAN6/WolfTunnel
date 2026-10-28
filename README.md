@@ -1,6 +1,6 @@
 # FtR WolfTunnel
 
-Build v0.6 — remote browsing with a native SDL3 client and a separate Go Wolf Node.
+Build v0.6.x — remote browsing with a native SDL3 client and a separate Go Wolf Node.
 
 The node runs an isolated Chromium engine, executes webpage JavaScript and sends
 compressed viewport pixels over TLS 1.3. The native client displays those pixels
@@ -27,6 +27,7 @@ make fuzz           # seven bounded fuzz campaigns
 make smoke          # native UI smoke, no browser required
 make browser-smoke  # managed-runtime fixture/browser checks
 make browser-native # desktop screenshot with managed runtime
+make compatibility-test # local protocol-aware rejection and stream-fault profiles
 make network-test   # isolated local delay/loss/bandwidth + TLS/proxy capture
 make production-smoke # optional external-site check; excluded from local v0.6 validation
 make node-package   # executable + renderer deployment archive
@@ -37,7 +38,13 @@ make node-package GOARCH=arm64 # cross-package the ARM64 node and native rendere
 controlled fixtures, tests browser input/pixels/isolation, measures latency and
 closes all session resources. Browser integration tests intentionally skip in
 plain `go test` unless `WOLF_BROWSER_BIN` is provided; the Makefile browser target
-requires it. Screenshots and raw results go under ignored `build/v0.6/`.
+requires it. Screenshots and raw results go under ignored `build/v0.6.x/`.
+
+v0.6.x fixes a reproduced five-second display-attachment expiry, tracks browser
+readiness and display state independently, and correlates client/node startup
+logs. Ctrl+click and supported user-gesture new-window requests open Wolf tabs;
+the bottom bar shows hovered and pending destinations. Native conversion reuses
+a bounded pixel buffer and measures upload/submission/present boundaries.
 
 v0.6 reports DNS, TCP, proxy, TLS, identity, protocol, authentication and
 browser startup separately. Direct `tls-tcp` remains the default. Explicit
@@ -65,7 +72,7 @@ directory. See [browser troubleshooting](docs/BROWSER-TROUBLESHOOTING.md).
 
 See [SETUP.md](SETUP.md) for installation, [USAGE.md](USAGE.md) for everyday use, [ARCHITECTURE.md](ARCHITECTURE.md)
 for execution boundaries, [Protocol v3](docs/PROTOCOL-v3.md) for the wire format,
-and the [v0.6 implementation and validation report](doc/IMPLEMENTATION-v0_6-2026_10_27.md)
+and the [v0.6.x implementation and validation report](doc/IMPLEMENTATION-v0_6_x-2026_10_28.md)
 for requirement coverage, measurements and remaining release considerations.
 
 Each installation has its own Ed25519 key. Existing policy remains: owner-issued

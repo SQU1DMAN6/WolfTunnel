@@ -15,6 +15,16 @@ import (
 
 var ErrPixel = errors.New("PIXEL_ERROR")
 
+// Failure exposes only a fixed decoder category and already bounded metadata.
+type Failure struct {
+	Category      string
+	Encoding      byte
+	Width, Height int
+}
+
+func (f *Failure) Error() string { return ErrPixel.Error() }
+func (f *Failure) Unwrap() error { return ErrPixel }
+
 const MaxPixels = 3840 * 2160
 const Prefix = 48
 
@@ -45,16 +55,16 @@ func (u Update) Encode() ([]byte, error) {
 }
 func Parse(p []byte) (Update, error) {
 	if len(p) < Prefix || len(p) > v3.MaxPixel || p[1] != 0 || p[2] != 0 || p[3] != 0 {
-		return Update{}, ErrPixel
+		return Update{}, &Failure{Category: "metadata"}
 	}
 	u := Update{Encoding: p[0], Width: int(binary.BigEndian.Uint32(p[4:8])), Height: int(binary.BigEndian.Uint32(p[8:12])), Captured: time.Unix(0, int64(binary.BigEndian.Uint64(p[12:20]))), InputSequence: binary.BigEndian.Uint64(p[20:28]), CaptureUS: binary.BigEndian.Uint32(p[28:32]), Data: p[Prefix:]}
 	copy(u.Tab[:], p[32:48])
 	if !valid(u.Width, u.Height) || (u.Encoding != 1 && u.Encoding != 2) {
-		return Update{}, ErrPixel
+		return Update{}, &Failure{Category: "dimensions_or_encoding"}
 	}
 	cfg, format, e := image.DecodeConfig(bytes.NewReader(u.Data))
 	if e != nil || cfg.Width != u.Width || cfg.Height != u.Height || (u.Encoding == 1 && format != "jpeg") || (u.Encoding == 2 && format != "png") {
-		return Update{}, ErrPixel
+		return u, &Failure{Category: "image_header", Encoding: u.Encoding, Width: u.Width, Height: u.Height}
 	}
 	return u, nil
 }
@@ -68,7 +78,7 @@ func Decode(p []byte) (Update, image.Image, error) {
 	}
 	img, _, e := image.Decode(bytes.NewReader(u.Data))
 	if e != nil {
-		return u, nil, ErrPixel
+		return u, nil, &Failure{Category: "image_decode", Encoding: u.Encoding, Width: u.Width, Height: u.Height}
 	}
 	return u, img, nil
 }

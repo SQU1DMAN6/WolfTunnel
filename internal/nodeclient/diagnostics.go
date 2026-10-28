@@ -68,7 +68,17 @@ func ReportTo(logger *audit.Logger, event string, err error, endpoint string) {
 	if logger == nil {
 		return
 	}
-	logger.Log(audit.Entry{Component: "client", Event: event, Code: ErrorCode(err), Error: FailureDetail(err), Endpoint: endpoint})
+	entry := audit.Entry{Component: "client", Event: event, Code: ErrorCode(err), Error: FailureDetail(err), Endpoint: endpoint}
+	var f *LifecycleError
+	if errors.As(err, &f) {
+		entry.Evidence = decoderEvidence(f.Status)
+		entry.Correlation = f.Status.Correlation
+		entry.CauseCode = f.Status.CauseCode
+		entry.Stage = f.Status.Stage
+		entry.Status = f.Status.Control + "/" + f.Status.Browser + "/" + f.Status.Display + "/" + f.Status.Frame
+		entry.DurationMS = f.Status.ElapsedMS
+	}
+	logger.Log(entry)
 }
 func (c Client) Report(event string, err error) {
 	endpoint := ""

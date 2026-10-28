@@ -19,7 +19,7 @@ import (
 )
 
 func TestResolveNavigationAndSearch(t *testing.T) {
-	for _, tc := range []struct{ input, template, want string }{{"https://example.com/a?q=x#fragment", nodeclient.Google, "https://example.com/a?q=x"}, {"wolves & snow ☃", nodeclient.DuckDuckGo, "https://duckduckgo.com/?q=wolves+%26+snow+%E2%98%83"}, {"https://www.google.com/search?q=wolf", nodeclient.DuckDuckGo, "https://www.google.com/search?q=wolf"}, {"example.com", nodeclient.Google, "https://www.google.com/search?q=example.com"}} {
+	for _, tc := range []struct{ input, template, want string }{{"https://example.com/a?q=x#fragment", nodeclient.Google, "https://example.com/a?q=x#fragment"}, {"wolves & snow ☃", nodeclient.DuckDuckGo, "https://duckduckgo.com/?q=wolves+%26+snow+%E2%98%83"}, {"https://www.google.com/search?q=wolf", nodeclient.DuckDuckGo, "https://www.google.com/search?q=wolf"}, {"example.com", nodeclient.Google, "https://www.google.com/search?q=example.com"}} {
 		out, err := Resolve(tc.input, tc.template)
 		if err != nil || out != tc.want {
 			t.Fatalf("%q: %q %v", tc.input, out, err)

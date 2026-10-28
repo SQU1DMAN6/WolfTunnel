@@ -18,6 +18,7 @@ import (
 	"wolftunnel/internal/auth"
 	"wolftunnel/internal/browser"
 	"wolftunnel/internal/browserdiag"
+	"wolftunnel/internal/browserlife"
 	"wolftunnel/internal/browsernet"
 	"wolftunnel/internal/pixelstream"
 	v3 "wolftunnel/internal/protocol/v3"
@@ -30,6 +31,8 @@ type wire struct {
 	out                uint64
 	in                 uint64
 	startupDiagnostics bool
+	lifecycle          bool
+	navigation         bool
 }
 
 func (w *wire) read() (v3.Frame, v3.Control, error) {
@@ -113,7 +116,7 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		m.fail(w, v3.ID{}, "", "UNSUPPORTED_VERSION")
 		return
 	}
-	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input", "browser-start-diagnostics", "input-v06"}}) != nil {
+	if w.send(v3.NodeIdentity, v3.ID{}, v3.Control{Version: 3, Fingerprint: m.Fingerprint, Capabilities: []string{"remote-browser", "jpeg", "two-channels", "tabs", "resize", "input", "browser-start-diagnostics", "input-v06", "lifecycle-v06x", "navigation-v06x"}}) != nil {
 		return
 	}
 	f, a, e := w.read()
@@ -131,7 +134,16 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		m.fail(w, f.Session, "", "AUTH_FAILED")
 		return
 	}
-	w.startupDiagnostics = len(a.Capabilities) == 1 && a.Capabilities[0] == "browser-start-diagnostics"
+	for _, cap := range a.Capabilities {
+		switch cap {
+		case "browser-start-diagnostics":
+			w.startupDiagnostics = true
+		case "lifecycle-v06x":
+			w.lifecycle = true
+		case "navigation-v06x":
+			w.navigation = true
+		}
+	}
 	if w.send(v3.AuthResult, f.Session, v3.Control{ClientID: a.ClientID}) != nil {
 		return
 	}
@@ -144,6 +156,13 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 	if e != nil || f.Type != v3.SessionCreate || !f.Session.Zero() {
 		m.fail(w, f.Session, a.ClientID, "PROTOCOL_ERROR")
 		return
+	}
+	if create.Attempt != "" && !w.lifecycle {
+		m.fail(w, v3.ID{}, a.ClientID, "PROTOCOL_ERROR")
+		return
+	}
+	if m.Log != nil {
+		m.Log.Log(audit.Entry{Event: "browser_initialisation_requested", ClientID: a.ClientID, Correlation: create.Attempt, Stage: "request_validation", Component: "browser"})
 	}
 	width, height := create.Width, create.Height
 	if width == 0 && height == 0 {
@@ -186,10 +205,15 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &Session{id: v3.NewID(), owner: a.ClientID, m: m, ctx: ctx, cancel: cancel, ctrl: w, ready: make(chan struct{}), latest: make(chan []byte, 1), events: make(chan response, 32), width: width, height: height}
+	s.attempt = create.Attempt
+	s.navigation = w.navigation
 	s.navSlots = make(chan struct{}, 2)
 	s.activity.Store(time.Now().UnixNano())
 	s.started = time.Now()
 	m.sessions[s.id] = s
+	if m.Log != nil {
+		m.Log.Log(audit.Entry{Event: "browser_session_reserved", ClientID: s.owner, SessionID: s.id.String(), Correlation: s.attempt, Stage: "browser_start", Component: "browser"})
+	}
 	m.mu.Unlock()
 	defer s.close()
 	proxy, e := browsernet.New(ctx, m.ProxyOptions)
@@ -200,7 +224,10 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		return
 	}
 	_ = c.SetDeadline(time.Now().Add(cfg.Startup + 5*time.Second))
-	launched, startError := browser.StartObserved(ctx, cfg, proxy, func(d browser.StartupDiagnostic) { browser.RecordDiagnostic(m.Log, d, s.owner, s.id.String()) })
+	launched, startError := browser.StartObserved(ctx, cfg, proxy, func(d browser.StartupDiagnostic) {
+		d.Correlation = s.attempt
+		browser.RecordDiagnostic(m.Log, d, s.owner, s.id.String())
+	})
 	e = startError
 	if e != nil {
 		proxy.Close()
@@ -214,12 +241,13 @@ func (m *Manager) Handle(parent context.Context, c *tls.Conn, r io.Reader) {
 		return
 	}
 	s.browser = launched
+	launched.EnableNavigation(w.navigation)
 	s.mu.Unlock()
 	if _, e = m.Auth.Lookup(s.owner); e != nil {
 		m.fail(w, s.id, s.owner, "AUTH_FAILED")
 		return
 	}
-	if w.send(v3.SessionCreated, s.id, v3.Control{Width: width, Height: height, MaxTabs: cfg.MaxTabs}) != nil {
+	if w.send(v3.SessionCreated, s.id, v3.Control{Width: width, Height: height, MaxTabs: cfg.MaxTabs, Attempt: s.attempt}) != nil {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
@@ -242,6 +270,8 @@ type response struct {
 	body v3.Control
 }
 type Session struct {
+	attempt       string
+	navigation    bool
 	started       time.Time
 	frames        atomic.Uint64
 	pixelBytes    atomic.Uint64
@@ -285,7 +315,7 @@ func (s *Session) close() {
 		delete(s.m.sessions, s.id)
 		s.m.mu.Unlock()
 		if s.m.Log != nil {
-			s.m.Log.Log(audit.Entry{Event: "browser_session_closed", ClientID: s.owner, SessionID: s.id.String(), DurationMS: time.Since(s.started).Milliseconds(), Frames: s.frames.Load(), PixelBytes: s.pixelBytes.Load(), Dropped: s.dropped.Load()})
+			s.m.Log.Log(audit.Entry{Event: "browser_session_closed", Correlation: s.attempt, ClientID: s.owner, SessionID: s.id.String(), DurationMS: time.Since(s.started).Milliseconds(), Frames: s.frames.Load(), PixelBytes: s.pixelBytes.Load(), Dropped: s.dropped.Load()})
 		}
 	})
 }
@@ -333,19 +363,42 @@ func (s *Session) monitor() {
 		case <-s.ctx.Done():
 			return
 		case <-s.browser.Done():
-			s.terminal("BROWSER_CRASHED")
+			s.terminal(s.browser.TerminalCode())
 			return
 		case e := <-s.browser.Events:
-			s.emit(v3.NavigationStatus, v3.Control{Tab: e.Tab, State: e.State, Code: v3.SafeCode(e.Code), Status: e.Status, Target: e.Target})
+			typ := byte(v3.NavigationStatus)
+			if e.Kind == "hover" {
+				if !s.navigation {
+					continue
+				}
+				typ = v3.LinkStatus
+			}
+			if e.Kind == "newtab" {
+				if !s.navigation {
+					continue
+				}
+				typ = v3.NewTabRequest
+			}
+			s.emit(typ, v3.Control{Tab: e.Tab, State: e.State, Code: v3.SafeCode(e.Code), Status: e.Status, Target: e.Target})
 		case <-ticker.C:
 			if _, e := s.m.Auth.Lookup(s.owner); e != nil {
 				s.m.log("browser_authorisation_lost", s.owner, s.id, "AUTH_FAILED")
 				s.terminal("AUTH_FAILED")
 				return
 			}
+			// Attachment has its own deadline. Startup time must not consume the
+			// user's browsing-idle allowance before a display is attached.
+			select {
+			case <-s.ready:
+			default:
+				continue
+			}
 			if time.Since(time.Unix(0, s.activity.Load())) > s.m.Config.Idle {
-				s.cancel()
-				s.ctrl.c.Close()
+				code := "BROWSER_TIMEOUT"
+				if s.ctrl.lifecycle {
+					code = "BROWSER_IDLE_TIMEOUT"
+				}
+				s.terminal(code)
 				return
 			}
 		}
@@ -357,7 +410,12 @@ func (s *Session) capture() {
 	case <-s.ready:
 	case <-s.ctx.Done():
 		return
-	case <-time.After(5 * time.Second):
+	case <-time.After(browserlife.DisplayAttach):
+		code := "PIXEL_ERROR"
+		if s.ctrl.lifecycle {
+			code = "DISPLAY_ATTACH_TIMEOUT"
+		}
+		s.terminal(code)
 		s.cancel()
 		s.ctrl.c.Close()
 		return
@@ -378,7 +436,13 @@ func (s *Session) capture() {
 			data, w, h, tab, e := s.browser.CapturePage(ctx)
 			cancel()
 			if e != nil {
+				if s.ctx.Err() != nil {
+					return
+				}
 				failures++
+				if s.m.Log != nil {
+					s.m.Log.Log(audit.Entry{Event: "browser_capture_failed", Component: "browser", Stage: "frame_capture", Correlation: s.attempt, SessionID: s.id.String(), ClientID: s.owner, Code: errorCode(e), DurationMS: time.Since(start).Milliseconds(), Frames: uint64(failures)})
+				}
 				if failures >= 3 {
 					s.terminal("PIXEL_ERROR")
 					return
@@ -425,7 +489,7 @@ func (s *Session) control() {
 	inputWindow := time.Now()
 	inputCount := 0
 	for {
-		s.ctrl.c.SetReadDeadline(time.Now().Add(30 * time.Second))
+		s.ctrl.c.SetReadDeadline(time.Now().Add(browserlife.ControlIdle))
 		f, c, e := s.ctrl.read()
 		received := time.Now()
 		if e != nil {
@@ -584,6 +648,10 @@ func (m *Manager) attach(parent context.Context, w *wire, owner string, id v3.ID
 		return
 	}
 	w.c.SetDeadline(time.Time{})
+	s.activity.Store(time.Now().UnixNano())
+	if m.Log != nil {
+		m.Log.Log(audit.Entry{Event: "browser_display_attached", Correlation: s.attempt, SessionID: s.id.String(), ClientID: s.owner, Component: "browser", Stage: "display_attached", DurationMS: time.Since(s.started).Milliseconds()})
+	}
 	close(s.ready)
 	readDone := make(chan struct{})
 	go func() {
@@ -631,7 +699,9 @@ func (m *Manager) attach(parent context.Context, w *wire, owner string, id v3.ID
 			if e = w.frame(v3.Frame{Type: v3.PixelUpdate, Flags: v3.FullFrame, Session: id, Payload: payload}); e != nil {
 				return
 			}
-			s.frames.Add(1)
+			if s.frames.Add(1) == 1 && s.m.Log != nil {
+				s.m.Log.Log(audit.Entry{Event: "browser_first_frame_sent", Correlation: s.attempt, SessionID: s.id.String(), ClientID: s.owner, Component: "browser", Stage: "frame_sent", DurationMS: time.Since(s.started).Milliseconds()})
+			}
 			s.pixelBytes.Add(uint64(len(payload)))
 		}
 	}

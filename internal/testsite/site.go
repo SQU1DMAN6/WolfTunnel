@@ -27,6 +27,21 @@ type Site struct {
 
 func (s *Site) Snapshot() Stats { s.mu.Lock(); defer s.mu.Unlock(); return s.latest }
 func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/links" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, Links)
+		return
+	}
+	if r.URL.Path == "/link-redirect" {
+		http.Redirect(w, r, "http://fixture.test/destination?redirected=1", 302)
+		return
+	}
+	if r.URL.Path == "/destination" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, "<!doctype html><title>Destination</title><style>body{background:#15b055;color:white;font:24px sans-serif}</style><h1>New Wolf tab destination</h1>")
+		return
+	}
+
 	if r.URL.Path == "/events" {
 		if r.Method != "POST" {
 			w.WriteHeader(405)
@@ -95,3 +110,6 @@ el('scroll').onscroll=()=>{stats.ScrollX=el('scroll').scrollLeft;stats.ScrollY=e
 el('verify').onclick=()=>{stats.Verified=el('choice').checked&&el('answer').value==='WOLF';el('challenge').textContent=stats.Verified?'Verified locally ✓':'Needs your choice and the word WOLF';report()};
 addEventListener('resize',report);visualViewport.addEventListener('resize',report);let ticks=0;setInterval(()=>{el('tick').textContent=++ticks},150);report();
 </script></body></html>`
+
+// Links exercises normal, target, scripted, redirected and rejected navigation.
+const Links = `<!doctype html><meta charset="utf-8"><title>Local link navigation</title><style>body{margin:0;background:#1555b0;color:white;font:18px sans-serif}a,button{position:absolute;left:20px;padding:8px;color:#dffff0}button{color:#163141}#normal{top:20px}#blank{top:80px}#redirect{top:140px}#popup{top:200px}#private{top:260px}#invalid{top:320px}#nested{top:380px}#external{top:440px}p{position:absolute;top:500px}</style><a id="normal" href="/destination?case=normal">Normal destination</a><a id="blank" href="/destination?case=blank" target="_blank">Target blank</a><a id="redirect" href="/link-redirect">Redirect destination</a><button id="popup" onclick="window.open('/destination?case=script','_blank')">User-gesture window.open</button><a id="private" href="http://127.0.0.1/secret">Rejected private link</a><a id="invalid" href="javascript:void(0)">Unsupported link</a><a id="nested" href="/destination?case=nested"><span>Nested link element</span></a><a id="external" href="http://second.fixture.test/destination?case=external">Controlled external host</a><p>Ctrl+click opens a Wolf tab. Non-link area is intentionally empty.</p>`

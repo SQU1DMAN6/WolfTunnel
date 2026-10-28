@@ -1,4 +1,4 @@
-.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke install-sandbox-policy network-test
+.PHONY: build deps node test race fuzz smoke fmt clean browser-test browser-smoke browser-native renderer node-package production-smoke install-sandbox-policy network-test compatibility-test
 GO ?= go
 GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
@@ -9,7 +9,7 @@ BROWSER_MANIFEST = internal/renderer/runtime-lock$(if $(filter arm64,$(GOARCH)),
 BROWSER_VERSION = $(shell sed -n 's/  "version": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
 BROWSER_BINARY = $(shell sed -n 's/  "binary": "\([^"]*\)",/\1/p' $(BROWSER_MANIFEST))
 BROWSER ?= $(CURDIR)/build/renderer/$(BROWSER_VERSION)-$(GOOS)-$(GOARCH)/$(BROWSER_BINARY)
-ARTIFACT_DIR ?= $(CURDIR)/build/v0.6
+ARTIFACT_DIR ?= $(CURDIR)/build/v0.6.x
 
 # Deliberate frontend dependency updates require updating frontend/README.md.
 deps:
@@ -63,10 +63,10 @@ fmt:
 
 browser-test: build renderer
 	@test -x "$(BROWSER)" || (echo 'Set BROWSER to a maintained Chromium executable'; exit 1)
-	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/browser ./internal/session -count=1 -v -timeout 120s
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/browser ./internal/session ./frontend -count=1 -v -timeout 180s
 
 browser-native: build renderer
-	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_NATIVE_DISPLAY=1 WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run 'TestNativeClientBrowserScreenshot|TestV06NativeClientInteraction' -count=1 -v -timeout 50s
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_NATIVE_DISPLAY=1 WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run 'TestNativeClientBrowserScreenshot|TestV06NativeClientInteraction|TestNativeNavigationScreenshot' -count=1 -v -timeout 50s
 
 browser-smoke: browser-test
 	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_NODE_BIN="$(CURDIR)/build/wolfnode" WOLF_CLIENT_BIN="$(CURDIR)/build/wolfclient" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run '^TestBuiltBinaryBrowserSmoke$$' -count=1 -v -timeout 60s
@@ -87,3 +87,6 @@ network-test:
 	mkdir -p "$(ARTIFACT_DIR)"
 	$(GO) test -c -o "$(ARTIFACT_DIR)/transport.test" ./internal/transport
 	sh internal/transport/netem.sh "$(ARTIFACT_DIR)" "$(ARTIFACT_DIR)/transport.test"
+
+compatibility-test: build renderer
+	WOLF_BROWSER_BIN="$(BROWSER)" WOLF_ARTIFACT_DIR="$(ARTIFACT_DIR)" $(GO) test ./internal/session -run 'TestControlledInspectionProfiles|TestDelayedDisplayAttachment' -count=1 -v -timeout 120s

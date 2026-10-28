@@ -236,9 +236,10 @@ func awaitFrame(t *testing.T, b *nodeclient.Browser, predicate func(nodeclient.B
 	}
 }
 
-func TestNativeClientBrowserScreenshot(t *testing.T) { nativeClientScreenshot(t, false) }
-func TestV06NativeClientInteraction(t *testing.T)    { nativeClientScreenshot(t, true) }
-func nativeClientScreenshot(t *testing.T, v06 bool) {
+func TestNativeClientBrowserScreenshot(t *testing.T) { nativeClientScreenshot(t, false, false) }
+func TestV06NativeClientInteraction(t *testing.T)    { nativeClientScreenshot(t, true, false) }
+func TestNativeNavigationScreenshot(t *testing.T)    { nativeClientScreenshot(t, false, true) }
+func nativeClientScreenshot(t *testing.T, v06 bool, navigation bool) {
 	bin, clientBin := os.Getenv("WOLF_BROWSER_BIN"), os.Getenv("WOLF_CLIENT_BIN")
 	if bin == "" || clientBin == "" {
 		t.Skip("required native smoke target sets browser/client binaries")
@@ -257,7 +258,7 @@ func nativeClientScreenshot(t *testing.T, v06 bool) {
 	defer cancel()
 	site := &testsite.Site{}
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if v06 {
+		if v06 || navigation {
 			site.ServeHTTP(w, r)
 			return
 		}
@@ -317,9 +318,16 @@ func nativeClientScreenshot(t *testing.T, v06 bool) {
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		t.Fatal(e)
 	}
-	command := exec.CommandContext(ctx, clientBin, "-state-dir", clientState, "-browser-smoke", "http://fixture.test/pixels?token=fixture-secret", "-screenshot", filepath.Join(dir, "native-client.bmp"), "-smoke-timeout", "25s")
+	target := "http://fixture.test/pixels?token=fixture-secret"
+	if navigation {
+		target = "http://fixture.test/links?token=fixture-secret"
+	}
+	command := exec.CommandContext(ctx, clientBin, "-state-dir", clientState, "-browser-smoke", target, "-screenshot", filepath.Join(dir, "native-client.bmp"), "-smoke-timeout", "25s")
 	if v06 {
 		command.Args = append(command.Args, "-fixture-smoke", "-window-size", "1100x850")
+	}
+	if navigation {
+		command.Args = append(command.Args, "-navigation-smoke", "-window-size", "1100x850")
 	}
 	command.Env = os.Environ()
 	if os.Getenv("WOLF_NATIVE_DISPLAY") != "1" {
@@ -414,8 +422,18 @@ func TestV3AuthenticationWithoutBrowser(t *testing.T) {
 	if e = c.Enrol(ctx, code); e != nil {
 		t.Fatal(e)
 	}
+	var correlation string
+	c.BrowserObserver = func(status nodeclient.BrowserStatus) {
+		if correlation == "" {
+			correlation = status.Correlation
+		}
+	}
 	if _, e = c.OpenBrowser(ctx, nodeclient.BrowserOptions{}); nodeclient.ErrorCode(e) != "BROWSER_UNAVAILABLE" {
 		t.Fatal("missing browser did not fail closed", e)
+	}
+	nodeLog, readError := os.ReadFile(filepath.Join(root, "logs", "node.log"))
+	if readError != nil || correlation == "" || !bytes.Contains(nodeLog, []byte(correlation)) {
+		t.Fatal("rejected initialization lost its correlation", readError)
 	}
 	c.Config.Fingerprint = strings.Repeat("0", 64)
 	if _, e = c.OpenBrowser(ctx, nodeclient.BrowserOptions{}); nodeclient.ErrorCode(e) != "NODE_IDENTITY_CHANGED" {

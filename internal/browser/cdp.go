@@ -23,15 +23,16 @@ type packet struct {
 	} `json:"error,omitempty"`
 }
 type cdp struct {
-	r       io.ReadCloser
-	w       io.WriteCloser
-	mu      sync.Mutex
-	write   sync.Mutex
-	next    atomic.Uint64
-	pending map[uint64]chan packet
-	events  chan packet
-	done    chan struct{}
-	once    sync.Once
+	eventOverflow atomic.Bool
+	r             io.ReadCloser
+	w             io.WriteCloser
+	mu            sync.Mutex
+	write         sync.Mutex
+	next          atomic.Uint64
+	pending       map[uint64]chan packet
+	events        chan packet
+	done          chan struct{}
+	once          sync.Once
 }
 
 func newCDP(r io.ReadCloser, w io.WriteCloser) *cdp {
@@ -74,13 +75,14 @@ func (c *cdp) read() {
 			}
 		} else {
 			switch p.Method {
-			case "Page.loadEventFired", "Page.frameNavigated", "Network.responseReceived", "Network.loadingFailed", "Target.targetCrashed", "Inspector.targetCrashed", "Target.targetCreated":
+			case "Page.navigatedWithinDocument", "Page.windowOpen", "Page.loadEventFired", "Page.frameNavigated", "Network.responseReceived", "Network.loadingFailed", "Target.targetCrashed", "Inspector.targetCrashed", "Target.targetCreated":
 				select {
 				case c.events <- p:
 				case <-c.done:
 					return
 				default:
-					if p.Method == "Target.targetCreated" {
+					if p.Method == "Target.targetCreated" || p.Method == "Page.windowOpen" {
+						c.eventOverflow.Store(true)
 						return
 					}
 				}

@@ -254,7 +254,7 @@ last one year and require deliberate identity rotation and new client trust.
 
 ## Connect a Wolf Client and browse
 
-1. Launch a WolfTunnel v0.6 client. First launch opens connection settings; paste
+1. Launch a WolfTunnel v0.6.x client. First launch opens connection settings; paste
    the complete invitation and choose **Connect**. If building the desktop client,
    install Go 1.27+, a C compiler, pkg-config, SDL3 **3.4.18** and SDL3_ttf
    **3.2.2**, then use `make build` and `./build/wolfclient`.
@@ -332,3 +332,20 @@ approved policy compatible with end-to-end pinning rather than changing the pin
 to an inspection certificate. Client diagnostics distinguish DNS, TCP, proxy,
 TLS, identity, authentication, browser and display failures; a timeout alone does
 not identify their cause.
+
+## Browser startup succeeds, but no page appears
+
+Update both peers to v0.6.x. In client Settings diagnostics, inspect Control,
+Browser, Display, Frame, the failure cause and correlation ID. Authentication
+alone confirms no browser rendering. The node now permits 30 seconds for display
+attachment; an older five-second limit could expire a healthy ready session.
+The client bounds display setup to 25 seconds and waits up to 15 seconds for a
+first requested image. No first-image timer runs while no page has been requested.
+
+Match the correlation ID in the client and current node logs. Browser-process
+failures retain their specific node startup advice; display rejection or timeout
+is a separate failure. A display setup failure probes control responsiveness
+before teardown. For an approved managed-network deployment, provide the safe
+checkpoint/cause to the administrator along with endpoint/port and inspection
+policy. Certificate replacement still fails pinning, and local simulation does
+not prove Zscaler acceptance.

@@ -7,7 +7,6 @@ import "C"
 
 import (
 	"image"
-	"image/draw"
 	"runtime"
 	"time"
 	"unsafe"
@@ -62,21 +61,43 @@ func (u *ui) viewportDraw() {
 	area.Y = 140 + (float64(max(0, h-228))-area.H)/2
 	u.view = area
 	if u.textureTab != t.ID || u.textureSequence != t.FrameSequence {
-		rgba := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
-		draw.Draw(rgba, rgba.Bounds(), t.Frame, t.Frame.Bounds().Min, draw.Src)
+		at := time.Now()
+		rgba, e := prepareRGBA(t.Frame, u.rgba)
+		if e != nil {
+			u.m.Remote.PresentationFailed("RENDER_UPLOAD_FAILED")
+			return
+		}
+		// The RGBA fast path borrows an immutable received image. Only buffers
+		// allocated for conversion belong to this UI and may be reused later.
+		if _, borrowed := t.Frame.(*image.RGBA); !borrowed {
+			u.rgba = rgba
+		}
+		u.pendingPresentation = presentationSample{Sequence: t.FrameSequence, ConversionUS: time.Since(at).Microseconds()}
+		at = time.Now()
 		if len(rgba.Pix) > 0 {
 			if C.wolf_pixels(unsafe.Pointer(&rgba.Pix[0]), C.int(size.X), C.int(size.Y), C.int(rgba.Stride)) != 0 {
 				u.textureTab = t.ID
 				u.textureSequence = t.FrameSequence
+			} else {
+				u.m.Remote.PresentationFailed("RENDER_UPLOAD_FAILED")
+				return
 			}
 		}
+		u.pendingPresentation.UploadUS = time.Since(at).Microseconds()
 		runtime.KeepAlive(rgba)
 	}
 	setClip(0, 140, w, max(0, h-228))
-	C.wolf_viewport(C.float(area.X), C.float(area.Y), C.float(area.W), C.float(area.H))
+	at := time.Now()
+	if C.wolf_viewport(C.float(area.X), C.float(area.Y), C.float(area.W), C.float(area.H)) == 0 {
+		u.m.Remote.PresentationFailed("RENDER_SUBMIT_FAILED")
+	}
+	if u.pendingPresentation.Sequence != 0 {
+		u.pendingPresentation.SubmitUS = time.Since(at).Microseconds()
+	}
 	setClip(0, 0, 0, 0)
 }
 func (u *ui) blurRemote() {
+	u.m.LinkTarget = ""
 	if u.remoteFocus {
 		_ = u.m.SendInput(v3.Input{Kind: "blur"})
 	}

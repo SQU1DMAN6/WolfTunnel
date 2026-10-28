@@ -65,11 +65,13 @@ func (c Config) Validate() error {
 }
 
 type Client struct {
-	Config    Config
-	Key       ed25519.PrivateKey
-	Log       *audit.Logger
-	Connector transport.Connector
-	Observer  func(transport.Event)
+	correlation     string
+	Config          Config
+	Key             ed25519.PrivateKey
+	Log             *audit.Logger
+	Connector       transport.Connector
+	Observer        func(transport.Event)
+	BrowserObserver func(BrowserStatus)
 }
 type Error struct {
 	Code  string
@@ -81,6 +83,10 @@ func (e *Error) Unwrap() error { return e.Cause }
 func ErrorCode(err error) string {
 	if err == nil {
 		return ""
+	}
+	var lifecycle *LifecycleError
+	if errors.As(err, &lifecycle) {
+		return lifecycle.Code
 	}
 	if code := transport.Code(err); code != "" {
 		return code

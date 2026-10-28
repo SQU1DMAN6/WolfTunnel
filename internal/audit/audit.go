@@ -24,6 +24,8 @@ type Logger struct {
 }
 
 type Entry struct {
+	Correlation string `json:"correlation,omitempty"`
+	CauseCode   string `json:"cause_code,omitempty"`
 	Time        string `json:"time"`
 	Event       string `json:"event"`
 	Target      string `json:"target,omitempty"`

@@ -32,6 +32,7 @@ func run() (result error) {
 	state := flag.String("state-dir", root, "private client state directory")
 	smoke := flag.Bool("smoke-test", false, "run native input/tab smoke checks and exit")
 	smokeView := flag.String("smoke-view", "request", "final smoke-test view: request, settings or manual")
+	navigationSmoke := flag.Bool("navigation-smoke", false, "with -browser-smoke, verify local hover and Ctrl+click through SDL")
 	fixtureSmoke := flag.Bool("fixture-smoke", false, "with -browser-smoke, exercise the local v0.6 interaction fixture")
 	browserSmoke := flag.String("browser-smoke", "", "controlled browser fixture URL for timed pixel/input smoke")
 	smokeTimeout := flag.Duration("smoke-timeout", 25*time.Second, "native/browser smoke timeout")
@@ -132,7 +133,7 @@ func run() (result error) {
 				return fmt.Errorf("window size must be 520x420 to 8192x8192")
 			}
 		}
-		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout, OpenURL: *openURL, InteractionSmoke: *interactionSmoke, FixtureSmoke: *fixtureSmoke})
+		return frontend.Run(frontend.Options{StateDir: *state, Smoke: *smoke, Screenshot: *screenshot, Width: width, Height: height, UIScale: *uiScale, SmokeView: *smokeView, MetadataOnly: *metadataOnly, BrowserSmoke: *browserSmoke, SmokeTimeout: *smokeTimeout, OpenURL: *openURL, InteractionSmoke: *interactionSmoke, FixtureSmoke: *fixtureSmoke, NavigationSmoke: *navigationSmoke})
 	}
 	ctx := context.Background()
 	if *inviteFile != "" {

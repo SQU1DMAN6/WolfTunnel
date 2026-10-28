@@ -5,6 +5,7 @@
 typedef struct { int type,key,ctrl,shift,mod,button,repeat; float x,y,dx,dy,scale; const char *scan; const char *text; } WolfEvent;
 int wolf_init(const void *font, int length);
 void wolf_destroy(void);
+void wolf_forget_pixels(void);
 void wolf_dimensions(int *w,int *h,int *pw,int *ph,float *scale);
 void wolf_resize(int w,int h);
 void wolf_scale(float scale);
@@ -15,7 +16,7 @@ int wolf_poll(WolfEvent *out);
 void wolf_clear(void);
 void wolf_rect(float x,float y,float w,float h,int color);
 void wolf_text(float x,float y,float w,const char *text,int color);
-void wolf_present(void);
+int wolf_present(void);
 int wolf_capture(const char *path);
 void wolf_click(float x,float y);
 void wolf_input(const char *text);
@@ -27,5 +28,5 @@ void wolf_pinch(float x,float y,int phase,float scale);
 char *wolf_clipboard(void);
 #endif
 int wolf_pixels(const void *data,int width,int height,int pitch);
-void wolf_viewport(float x,float y,float w,float h);
+int wolf_viewport(float x,float y,float w,float h);
 void wolf_mouse(int down,int button,float x,float y);

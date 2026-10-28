@@ -32,14 +32,15 @@ const (
 )
 
 type Event struct {
-	Attempt    string `json:"attempt"`
-	Channel    string `json:"channel"`
-	State      State  `json:"state"`
-	Stage      State  `json:"stage"`
-	Transport  string `json:"transport"`
-	Retry      int    `json:"retry"`
-	DurationMS int64  `json:"duration_ms"`
-	Code       string `json:"code,omitempty"`
+	Correlation string `json:"correlation,omitempty"`
+	Attempt     string `json:"attempt"`
+	Channel     string `json:"channel"`
+	State       State  `json:"state"`
+	Stage       State  `json:"stage"`
+	Transport   string `json:"transport"`
+	Retry       int    `json:"retry"`
+	DurationMS  int64  `json:"duration_ms"`
+	Code        string `json:"code,omitempty"`
 }
 
 type Failure struct {

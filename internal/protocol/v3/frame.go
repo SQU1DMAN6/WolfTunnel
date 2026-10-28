@@ -48,6 +48,8 @@ const (
 	TabSelect
 	TabClose
 	History
+	LinkStatus
+	NewTabRequest
 )
 
 var ErrFrame = errors.New("PROTOCOL_ERROR")
@@ -94,7 +96,7 @@ func Read(r io.Reader, pixels bool) (Frame, error) {
 	flags := binary.BigEndian.Uint16(h[14:16])
 	n := binary.BigEndian.Uint32(h[16:20])
 	limit := uint32(MaxControl)
-	if binary.BigEndian.Uint32(h[44:]) != 0xF00DBEEF || typ < Hello || typ > History || (typ == PixelUpdate && (!pixels || flags != FullFrame)) || (typ != PixelUpdate && flags != 0) {
+	if binary.BigEndian.Uint32(h[44:]) != 0xF00DBEEF || typ < Hello || typ > NewTabRequest || (typ == PixelUpdate && (!pixels || flags != FullFrame)) || (typ != PixelUpdate && flags != 0) {
 		return Frame{}, ErrFrame
 	}
 	if typ == PixelUpdate {
@@ -113,7 +115,7 @@ func Write(w io.Writer, f Frame) error {
 	if f.Type == PixelUpdate {
 		max = MaxPixel
 	}
-	if len(f.Payload) > max || f.Type < Hello || f.Type > History || f.Sequence == 0 || (f.Type == PixelUpdate && f.Flags != FullFrame) || (f.Type != PixelUpdate && f.Flags != 0) {
+	if len(f.Payload) > max || f.Type < Hello || f.Type > NewTabRequest || f.Sequence == 0 || (f.Type == PixelUpdate && f.Flags != FullFrame) || (f.Type != PixelUpdate && f.Flags != 0) {
 		return ErrFrame
 	}
 	var h [HeaderSize]byte
@@ -203,6 +205,7 @@ func (i Input) Validate(w, h int) error {
 }
 
 type Control struct {
+	Attempt      string   `json:"attempt,omitempty"`
 	BrowserUS    int64    `json:"browser_us,omitempty"`
 	Versions     []int    `json:"versions,omitempty"`
 	Version      int      `json:"version,omitempty"`
@@ -228,7 +231,7 @@ type Control struct {
 	Ack          uint64   `json:"ack,omitempty"`
 }
 
-var fields = map[byte]string{Hello: "versions", NodeIdentity: "version fingerprint capabilities", Authenticate: "client_id role signature capabilities", AuthResult: "client_id", SessionCreate: "width height quality fps", SessionCreated: "width height max_tabs", PixelAttach: "", SessionClose: "", SessionStatus: "tab state code", Navigate: "tab target", NavigationStatus: "tab state code status title target", InputEvent: "tab input", InputAck: "ack dispatch_us browser_us", ViewportSet: "width height", ViewportAck: "width height", FrameRefresh: "", Cancel: "tab", Ping: "", Pong: "ack", Error: "tab code", TabCreate: "tab", TabSelect: "tab", TabClose: "tab", History: "tab direction"}
+var fields = map[byte]string{Hello: "versions", NodeIdentity: "version fingerprint capabilities", Authenticate: "client_id role signature capabilities", AuthResult: "client_id", SessionCreate: "width height quality fps attempt", SessionCreated: "width height max_tabs attempt", PixelAttach: "", SessionClose: "", SessionStatus: "tab state code", Navigate: "tab target", NavigationStatus: "tab state code status title target", InputEvent: "tab input", InputAck: "ack dispatch_us browser_us", ViewportSet: "width height", ViewportAck: "width height", FrameRefresh: "", Cancel: "tab", Ping: "", Pong: "ack", Error: "tab code", TabCreate: "tab", TabSelect: "tab", TabClose: "tab", History: "tab direction", LinkStatus: "tab target state code", NewTabRequest: "tab target state code"}
 
 func Encode(c Control) []byte { b, _ := json.Marshal(c); return b }
 func Decode(f Frame) (Control, error) {
@@ -251,6 +254,11 @@ func Decode(f Frame) (Control, error) {
 	}
 	for k := range raw {
 		if !strings.Contains(" "+allowed+" ", " "+k+" ") {
+			return Control{}, ErrFrame
+		}
+	}
+	if c.Attempt != "" {
+		if id, e := ParseID(c.Attempt); e != nil || id.Zero() {
 			return Control{}, ErrFrame
 		}
 	}
@@ -282,8 +290,15 @@ func Decode(f Frame) (Control, error) {
 		if len(c.ClientID) != 64 || len(c.Signature) != ed25519.SignatureSize || (c.Role != "control" && c.Role != "pixel") {
 			return Control{}, ErrFrame
 		}
-		if len(c.Capabilities) > 1 || (len(c.Capabilities) == 1 && c.Capabilities[0] != "browser-start-diagnostics") {
+		if len(c.Capabilities) > 3 {
 			return Control{}, ErrFrame
+		}
+		seen := map[string]bool{}
+		for _, cap := range c.Capabilities {
+			if seen[cap] || (cap != "browser-start-diagnostics" && cap != "lifecycle-v06x" && cap != "navigation-v06x") {
+				return Control{}, ErrFrame
+			}
+			seen[cap] = true
 		}
 	case AuthResult:
 		if len(c.ClientID) != 64 {
@@ -296,6 +311,22 @@ func Decode(f Frame) (Control, error) {
 	case Navigate, Cancel, TabCreate, TabSelect, TabClose, History, InputEvent:
 		id, err := ParseID(c.Tab)
 		if err != nil || id.Zero() || (f.Type == Navigate && c.Target == "") || (f.Type == InputEvent && c.Input == nil) || (f.Type == History && c.Direction != -1 && c.Direction != 1) {
+			return Control{}, ErrFrame
+		}
+	case LinkStatus, NewTabRequest:
+		if id, e := ParseID(c.Tab); e != nil || id.Zero() {
+			return Control{}, ErrFrame
+		}
+		if f.Type == NewTabRequest && c.Target == "" {
+			return Control{}, ErrFrame
+		}
+		if (f.Type == LinkStatus && c.State != "Hover") || (f.Type == NewTabRequest && c.State != "NewTabRequested" && c.State != "Rejected") {
+			return Control{}, ErrFrame
+		}
+		if c.Code != "" && SafeCode(c.Code) != c.Code {
+			return Control{}, ErrFrame
+		}
+		if f.Type == NewTabRequest && ((c.State == "Rejected" && c.Code == "") || (c.State == "NewTabRequested" && c.Code != "")) {
 			return Control{}, ErrFrame
 		}
 	case InputAck, Pong:
@@ -325,7 +356,7 @@ func SafeCode(code string) string {
 		return code
 	}
 	switch code {
-	case "", "PROTOCOL_ERROR", "UNSUPPORTED_VERSION", "AUTH_FAILED", "SESSION_INVALID", "SESSION_LIMIT", "TAB_LIMIT", "BROWSER_UNAVAILABLE", "BROWSER_START_FAILED", "BROWSER_TIMEOUT", "BROWSER_CRASHED", "NAVIGATION_FAILED", "NODE_POLICY_REJECTED", "NODE_DNS_ERROR", "NODE_UNREACHABLE", "VIEWPORT_REJECTED", "PIXEL_ERROR", "RESOURCE_LIMIT", "CANCELLED", "INTERNAL_ERROR":
+	case "BROWSER_IDLE_TIMEOUT", "DISPLAY_ATTACH_TIMEOUT", "FIRST_FRAME_TIMEOUT", "POPUP_BLOCKED", "", "PROTOCOL_ERROR", "UNSUPPORTED_VERSION", "AUTH_FAILED", "SESSION_INVALID", "SESSION_LIMIT", "TAB_LIMIT", "BROWSER_UNAVAILABLE", "BROWSER_START_FAILED", "BROWSER_TIMEOUT", "BROWSER_CRASHED", "NAVIGATION_FAILED", "NODE_POLICY_REJECTED", "NODE_DNS_ERROR", "NODE_UNREACHABLE", "VIEWPORT_REJECTED", "PIXEL_ERROR", "RESOURCE_LIMIT", "CANCELLED", "INTERNAL_ERROR":
 		return code
 	default:
 		return "INTERNAL_ERROR"

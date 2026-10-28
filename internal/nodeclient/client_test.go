@@ -426,7 +426,7 @@ func TestInvalidVersionAndInterruptedPixelStream(t *testing.T) {
 					t.Fatal(e)
 				}
 				defer conn.Close()
-				b := &Browser{ctx: ctx, cancel: cancel, pixel: &browserPeer{conn: conn}, Events: make(chan BrowserEvent, 1)}
+				b := &Browser{frameRequested: true, firstFrame: true, ctx: ctx, cancel: cancel, pixel: &browserPeer{conn: conn}, Events: make(chan BrowserEvent, 1)}
 				at := time.Now()
 				b.wg.Add(1)
 				go b.readPixels()
@@ -436,7 +436,11 @@ func TestInvalidVersionAndInterruptedPixelStream(t *testing.T) {
 				}
 				select {
 				case event := <-b.Events:
-					if event.Control.Code != "PIXEL_STREAM_FAILED" {
+					want := "DISPLAY_STREAM_LOST"
+					if mode == "stalled-pixel" {
+						want = "FRAME_IDLE_TIMEOUT"
+					}
+					if event.Control.Code != want {
 						t.Fatal(event.Control.Code)
 					}
 				default:

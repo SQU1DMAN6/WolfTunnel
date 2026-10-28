@@ -46,6 +46,12 @@ type completion struct {
 	input, target string
 }
 type Model struct {
+	BrowserState                                    nodeclient.BrowserStatus
+	Channels                                        map[string]transport.Event
+	LinkTarget                                      string
+	NavigationText                                  string
+	NavigationUntil                                 time.Time
+	NavigationTab                                   string
 	Network                                         transport.Event
 	progress                                        chan progressEvent
 	RemoteFailureCode                               string
@@ -90,7 +96,7 @@ func (m *Model) NewTab() {
 	}
 	limit := 7
 	if m.Remote != nil {
-		limit = m.Remote.MaxTabs
+		limit = min(7, m.Remote.MaxTabs)
 	}
 	if requests >= limit {
 		m.Notice = fmt.Sprintf("Maximum %d tabs; Settings has a reserved slot", limit)
@@ -178,6 +184,9 @@ func (m *Model) Disconnect() {
 	}
 	m.busy = false
 	for _, t := range m.Tabs {
+		t.Frame = nil
+		t.RemoteFrame = nodeclient.BrowserFrame{}
+		t.FrameSequence = 0
 		if t.cancel != nil {
 			t.cancel()
 			t.cancel = nil
@@ -187,6 +196,10 @@ func (m *Model) Disconnect() {
 	}
 	m.Connection = "Disconnected"
 	m.Network = transport.Event{State: transport.Disconnected}
+	m.BrowserState = nodeclient.BrowserStatus{}
+	m.Channels = nil
+	m.LinkTarget = ""
+	m.NavigationText = ""
 	m.Verified = false
 	m.RTT = 0
 }
@@ -351,8 +364,6 @@ func Resolve(input, template string) (string, error) {
 		if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.ContainsAny(s, "\r\n") {
 			return "", errors.New("only absolute HTTP and HTTPS URLs without credentials are supported")
 		}
-		u.Fragment = ""
-		u.RawFragment = ""
 		return u.String(), nil
 	}
 	if strings.Contains(s, "://") || strings.HasPrefix(strings.ToLower(s), "http:") || strings.HasPrefix(strings.ToLower(s), "https:") {

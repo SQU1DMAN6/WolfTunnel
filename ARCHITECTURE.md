@@ -1,4 +1,4 @@
-# WolfTunnel v0.6 architecture
+# WolfTunnel v0.6.x architecture
 
 The client renders trusted native controls and remote image textures. The node
 executes the webpage. Web content cannot paint the native toolbar, execute local
@@ -58,7 +58,12 @@ retries (three total tries), validated range zero to three. Delay starts at
 retry. Identity failures, denied/auth-required proxies, protocol, authorization
 and browser actions do not retry or replay. Browser startup retains a bounded
 90-second orchestration budget for the configurable node startup/result/attach
-path. Normal channel writes remain five seconds; control/pixel reads are bounded
+path. Display establishment is capped at 25 seconds, while the node allows
+30 seconds for attachment (20 seconds transport + protocol/scheduling margin).
+The old five-second node wait was shorter than permitted client connection work
+and could destroy a ready browser before attachment. No-frame waiting starts
+only when the first page is requested, with a separate 15-second first-frame
+deadline. Normal channel writes remain five seconds; control/pixel reads are bounded
 at 30/15 seconds. Losing a channel ends the disposable session. Reconnection
 uses saved installation credentials and creates a new browser; no page action
 is silently replayed.
@@ -83,7 +88,9 @@ the node pin; adding an inspection root cannot change that property.
 Each session receives its own Chromium process, off-the-record context, private
 profile/tmpfs, isolated state and systemd user scope. Tabs are pages in this
 session, not separate top-level process scopes. Background pages are frozen
-where supported. Unknown popup targets are closed; CDP operations remain fixed
+where supported. Chromium-created popup targets are closed. Capable clients receive validated
+user-gesture new-window destinations through the regular Wolf tab manager;
+unprompted/invalid requests get an explicit rejection. CDP operations remain fixed
 server methods. There is no generic CDP endpoint or browser-control TCP port.
 
 The launcher requires an application-managed, SHA-256-pinned ELF browser engine, refuses
@@ -222,7 +229,7 @@ seven-day retention by default, maximum 64 files; protected backups may outlive
 retention. Capture artifacts exist only through explicit capture/test requests.
 
 See [THREAT_MODEL-v0_6.md](docs/THREAT_MODEL-v0_6.md) and the
-[validation report](doc/IMPLEMENTATION-v0_6-2026_10_27.md) for tested boundaries
+[validation report](doc/IMPLEMENTATION-v0_6_x-2026_10_28.md) for tested boundaries
 and remaining limits. Audio, file transfer, clipboard sync, accessibility and
 production packaging need separate work.
 
@@ -287,3 +294,68 @@ capability drop, cgroups, egress validation and Chromium sandbox verification st
 mandatory. The global restricted-userns sysctl and distro bwrap policy are unchanged.
 New node-local policy errors map to existing wire categories for diagnostic-capable
 clients; existing v0.5 clients can continue using the protocol unchanged.
+
+## v0.6.x lifecycle, navigation and presentation
+
+A client-chosen, random 128-bit non-secret correlation ID travels in SESSION_CREATE
+and is echoed in SESSION_CREATED only after `lifecycle-v06x` negotiation. It is
+included in transport/browser/client/node first-frame and teardown logs. It adds
+no authority. Authentication proofs continue binding the session, role and signed
+capability list. Independent lifecycle observations record control, browser,
+display and image state, original cause and failure checkpoint. Display setup
+failure probes the established control channel with a bounded Ping to distinguish
+responsive from lost/unconfirmed control, then tears down the failed session.
+Local cleanup is reported as local cleanup; node process cleanup is confirmed
+separately by node logs/tests rather than assumed by the client.
+
+Readiness means CDP responds, the isolated browser context exists and Chromium's
+sandbox report passes. It does not mean a page has finished loading. Page
+creation/enabling, capture, first valid decoded image and SDL presentation are
+separate observations. First-frame capture does not wait for a site's full load
+or long-lived requests. Browsing-idle time starts after display attachment;
+attachment has its own deadline. Runtime frame errors distinguish protocol,
+truncation, decoder, first-frame and idle failure. Decoder diagnostics contain
+fixed categories and validated dimensions/encoding, never raw decoder text.
+
+`navigation-v06x` enables LINK_STATUS and NEW_TAB_REQUEST. Ctrl/Meta+primary-down
+hit-tests the actual DOM node via fixed CDP operations and a fixed function in
+an isolated browser world. A link request suppresses both ordinary button
+transitions even if the modifier is released before button-up. Non-link input
+continues through normal Chromium input. Hover hit-testing uses one coalesced
+slot, at most 10 Hz; stale results are discarded across focus/tab changes.
+`Page.windowOpen` supplies user-gesture popup destinations; redirects remain
+ordinary navigation events and never create tabs on their own. No third-party
+scripts or arbitrary CDP entry point are exposed to clients.
+
+Explicit, Ctrl+click and supported new-window destinations use the existing model
+and authenticated TAB_CREATE/SELECT/NAVIGATE operations. Tab identity is per page
+inside the same disposable browser session/context; same-session tabs share
+website state, while independent browser sessions remain isolated. The native
+ceiling is min(7, the node-advertised limit), plus the reserved Settings tab.
+Defaults remain four node tabs. Pending tabs wait for Ready before dependent
+selection/navigation. Creation failure rolls back allocation and does not turn
+an otherwise healthy session into a generic connectivity error. No new egress
+path exists: every destination, redirect and subresource still uses the original
+validation and namespace/Unix-proxy boundary.
+
+The bottom status area prioritises errors and short navigation state over hover,
+clears expired/cancelled/left-page destinations, rejects credential-bearing URLs,
+and visually clips long text while preserving the real navigation target.
+Page pixels cannot cover this trusted native area. New-window GET destinations
+are supported; popup context reuse and transferring POST form bodies/opener
+objects are not implemented.
+
+The SDL thread reuses a bounded conversion-owned RGBA surface for JPEG frames.
+Already-RGBA images can be borrowed directly without promoting that immutable
+received image into the reusable writable buffer. Conversion, texture upload,
+render submission and SDL present return are timed with local monotonic clocks.
+Explicit native smoke artifacts contain at most 120 timing samples; this boundary
+excludes monitor scanout. Upload/submission/presentation errors now fail explicitly
+instead of silently retaining a blank or stale texture. No new image/video codec,
+partial-frame dependency or weaker allocation check was introduced.
+
+Critical new-tab event overflow fails explicitly with RESOURCE_LIMIT; replaceable
+hover updates retry through the bounded slot. Control corruption/heartbeat expiry
+uses CONTROL_PROTOCOL_INVALID/CONTROL_IDLE_TIMEOUT, independently of display
+protocol and frame errors. Real capture failures log only their safe category,
+checkpoint, elapsed time and correlation; expected teardown cancellation is quiet.

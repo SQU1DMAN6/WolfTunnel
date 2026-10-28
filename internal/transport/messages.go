@@ -34,6 +34,37 @@ func StateMessage(s State) string {
 }
 func FailureMessage(code string) string {
 	switch code {
+	case "CONTROL_PROTOCOL_INVALID":
+		return "The established browser control connection received an invalid protocol frame. The session closed safely."
+	case "CONTROL_IDLE_TIMEOUT":
+		return "The browser control connection stopped returning messages before its heartbeat deadline. The session ended; display connectivity is diagnosed separately."
+	case "CONTROL_CONNECTION_FAILED":
+		return "Browser control connection failed. Inspect its TLS, protocol and authentication cause in diagnostics."
+	case "BROWSER_INITIALISATION_FAILED":
+		return "Control authentication succeeded, but browser initialization did not complete. Check node browser startup logs using the correlation ID."
+	case "DISPLAY_CONNECTION_FAILED":
+		return "The browser was ready, but its separate display connection failed. Diagnostics show the underlying cause and the last control-channel observation."
+	case "BROWSER_IDLE_TIMEOUT":
+		return "The node closed this disposable browser after its configured browsing-idle limit. Reconnect to start a fresh session."
+	case "DISPLAY_ATTACH_TIMEOUT":
+		return "The node's ready browser did not receive a display attachment before its deadline. Check the separate pixel connection and approved proxy policy."
+	case "FIRST_FRAME_TIMEOUT":
+		return "The browser and display connection started, but no valid first image arrived before the deadline. Check node capture/stream logs."
+	case "FRAME_IDLE_TIMEOUT":
+		return "The attached display stopped delivering complete frames. The disposable browser session has ended."
+	case "DISPLAY_STREAM_LOST":
+		return "The separate display connection closed. This does not by itself establish that control connectivity failed."
+	case "DISPLAY_FRAME_TRUNCATED":
+		return "The display connection ended partway through a frame. The incomplete image was discarded and the session closed."
+	case "DISPLAY_PROTOCOL_INVALID":
+		return "The display connection received an invalid or truncated frame. The session ended safely."
+	case "FRAME_DECODE_FAILED":
+		return "A received image could not be decoded within the validated format and dimension rules. The session ended safely."
+	case "RENDER_UPLOAD_FAILED", "RENDER_SUBMIT_FAILED", "RENDER_PRESENT_FAILED":
+		return "The native display could not upload or present the received image. Check the client renderer/display and its log."
+	case "POPUP_BLOCKED":
+		return "A page requested a window without a supported user gesture. Use a link or Ctrl+click instead."
+
 	case "UNSUPPORTED_TRANSPORT":
 		return "Unsupported transport. Select tls-tcp or explicit http-connect."
 	case "INVALID_PROXY":

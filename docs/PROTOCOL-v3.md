@@ -1,4 +1,4 @@
-# WolfTunnel v3 (application v0.5 / v0.6)
+# WolfTunnel v3 (application v0.5 / v0.6.x)
 
 v0 and v2 remain unchanged. Browser channels use a dedicated 48-byte big-endian
 header: ASCII `WolfTunnelv3` (12), version 3 (1), message type (1), flags (2),
@@ -94,3 +94,36 @@ role gets its own tunnel and TLS-exporter-bound proof. The client independently
 checks node TLS/pin after every connector returns. There is no raw framed
 plaintext mode. Local `CONTROL_STREAM_FAILED` and `PIXEL_STREAM_FAILED` diagnoses
 are client-side categories and are not new server error schema fields.
+
+## v0.6.x lifecycle and navigation capabilities
+
+New nodes advertise `lifecycle-v06x` and `navigation-v06x`. Clients request only
+advertised, implemented capabilities in signed AUTHENTICATE; accepted lists are
+unique, length <=3 and restricted to these two plus `browser-start-diagnostics`.
+The signature binds the entire list. Old clients still send their original
+schema; new clients send only the older schema/capabilities to older nodes.
+No browser/metadata or transport downgrade occurs.
+
+For lifecycle-capable peers, SESSION_CREATE permits optional `attempt`, a
+nonzero 128-bit hex correlation ID, and SESSION_CREATED echoes it. The client
+checks the echo. It is diagnostic data, never an authentication/session token.
+DISPLAY_ATTACH_TIMEOUT and BROWSER_IDLE_TIMEOUT are fixed error categories;
+old peers retain generic established error codes. The node's display attachment
+budget is 30 seconds; client display orchestration is bounded at 25 seconds
+within the total 90-second opening budget. First requested frame and subsequent
+stream inactivity each have a separate 15-second client deadline.
+
+Types 26 LINK_STATUS and 27 NEW_TAB_REQUEST are emitted only for
+navigation-capable clients. Payload fields are `tab` (origin page), `target`,
+`state` and optional safe `code`. LINK_STATUS carries Hover, including an empty
+target to clear hover. NEW_TAB_REQUEST carries NewTabRequested or Rejected;
+rejected requests never supply embedded URL credentials. These messages convey
+requests/data, not permission to navigate. The native client allocates through
+its existing tab manager and sends the usual authenticated operations; the node
+revalidates destination policy. A Ready acknowledgement precedes dependent
+selection/navigation for a newly created tab. Allocation errors roll back local
+pending state. Browser-requested popup targets are closed rather than adopted
+outside the manager. Ordinary redirects never generate this message.
+
+Image-frame format and limits are unchanged. Client-only frame/TLS/native
+presentation error categories are not accepted as arbitrary server error text.

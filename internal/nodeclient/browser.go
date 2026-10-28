@@ -9,23 +9,32 @@ import (
 	"sync/atomic"
 	"time"
 
+	"io"
+	"net"
+	"wolftunnel/internal/browserlife"
 	"wolftunnel/internal/pixelstream"
 	v3 "wolftunnel/internal/protocol/v3"
 	"wolftunnel/internal/transport"
 )
 
-type BrowserOptions struct{ Width, Height, Quality, FPS int }
+type BrowserOptions struct {
+	Width, Height, Quality, FPS         int
+	FirstFrameTimeout, FrameIdleTimeout time.Duration
+}
 type BrowserEvent struct {
-	Type    byte
-	Control v3.Control
+	Type           byte
+	Control        v3.Control
+	FailedCreation bool
 }
 type BrowserFrame struct {
-	Update   pixelstream.Update
-	Image    image.Image
-	Sequence uint64
-	DecodeUS int64
+	Update                pixelstream.Update
+	Image                 image.Image
+	Sequence              uint64
+	DecodeUS              int64
+	ReceivedAt, DecodedAt time.Time
 }
 type BrowserMetrics struct {
+	ConversionUS, UploadUS, SubmitUS, PresentUS      int64
 	BrowserUS                                        int64
 	Frames, Bytes, Skipped, InputAcks                uint64
 	DecodeUS, DispatchUS, InputQueueUS, RoundTripUS  int64
@@ -125,9 +134,8 @@ func (c Client) openPeer(ctx context.Context, role string, id v3.ID) (peer *brow
 	attempt.Set(transport.Authenticating)
 	credentials := v3.Control{ClientID: c.Config.ClientID, Role: role}
 	for _, capability := range out.Capabilities {
-		if capability == "browser-start-diagnostics" {
-			credentials.Capabilities = []string{capability}
-			break
+		if capability == "browser-start-diagnostics" || capability == "lifecycle-v06x" || capability == "navigation-v06x" {
+			credentials.Capabilities = append(credentials.Capabilities, capability)
 		}
 	}
 	proof := v3.Sign(c.Key, binding, id, credentials)
@@ -153,34 +161,45 @@ type transmit struct {
 	body v3.Control
 	at   time.Time
 }
+type pendingPage struct {
+	selectWanted bool
+	target       string
+}
+
 type Browser struct {
-	report           func(string, error)
-	textSequence     atomic.Uint64
-	ID               v3.ID
-	MaxTabs          int
-	Frames           chan BrowserFrame
-	Events           chan BrowserEvent
-	ctx              context.Context
-	cancel           context.CancelFunc
-	control, pixel   *browserPeer
-	once             sync.Once
-	wg               sync.WaitGroup
-	queue            chan transmit
-	wake             chan struct{}
-	mu               sync.Mutex
-	pages            map[string]bool
-	movement         *transmit
-	resize           *transmit
-	lastMove         *transmit
-	resizing         bool
-	resizeInFlight   bool
-	wantedW, wantedH int
-	pinchSupported   bool
-	selectedTab      string
-	pending          map[uint64]time.Time
-	metrics          BrowserMetrics
-	width, height    int
-	frames           atomic.Uint64
+	creatingPages             map[string]*pendingPage
+	life                      *lifecycle
+	firstTimeout, idleTimeout time.Duration
+	frameRequested            bool
+	firstFrame                bool
+	navigationSupported       bool
+	report                    func(string, error)
+	textSequence              atomic.Uint64
+	ID                        v3.ID
+	MaxTabs                   int
+	Frames                    chan BrowserFrame
+	Events                    chan BrowserEvent
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	control, pixel            *browserPeer
+	once                      sync.Once
+	wg                        sync.WaitGroup
+	queue                     chan transmit
+	wake                      chan struct{}
+	mu                        sync.Mutex
+	pages                     map[string]bool
+	movement                  *transmit
+	resize                    *transmit
+	lastMove                  *transmit
+	resizing                  bool
+	resizeInFlight            bool
+	wantedW, wantedH          int
+	pinchSupported            bool
+	selectedTab               string
+	pending                   map[uint64]time.Time
+	metrics                   BrowserMetrics
+	width, height             int
+	frames                    atomic.Uint64
 }
 
 func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *Browser, result error) {
@@ -188,18 +207,25 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 	defer func() { c.reportOperation("browser_open_result", start, result) }()
 	// Node startup is configurable up to 60 seconds. Leave room for the result
 	// and pixel authentication so a slow node's diagnosis is not lost as EOF.
-	startup, stop := context.WithTimeout(parent, 90*time.Second)
+	life := newLifecycle(c, v3.NewID().String())
+	c.correlation = life.snapshot().Correlation
+	life.set("control_connect", func(s *BrowserStatus) { s.Control = "connecting" })
+	startup, stop := context.WithTimeout(parent, browserlife.Startup)
 	defer stop()
 	p, e := c.openPeer(startup, "control", v3.ID{})
 	if e != nil {
-		return nil, e
+		return nil, life.failure("CONTROL_CONNECTION_FAILED", e)
 	}
+	life.set("browser_start", func(s *BrowserStatus) { s.Control = "authenticated"; s.Browser = "starting" })
 	defer func() {
 		if result != nil {
 			if startup.Err() != nil {
 				result = startup.Err()
 			}
-			result = stageFailure(p.attempt, result)
+			var diagnosed *LifecycleError
+			if !errors.As(result, &diagnosed) {
+				result = life.failure("BROWSER_INITIALISATION_FAILED", stageFailure(p.attempt, result))
+			}
 		}
 	}()
 	stopStartup := context.AfterFunc(startup, func() { p.conn.Close() })
@@ -211,7 +237,13 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 		}
 	}()
 	p.attempt.Set(transport.CreatingSession)
-	if _, e = p.send(v3.SessionCreate, v3.Control{Width: o.Width, Height: o.Height, Quality: o.Quality, FPS: o.FPS}); e != nil {
+	request := v3.Control{Width: o.Width, Height: o.Height, Quality: o.Quality, FPS: o.FPS}
+	for _, cap := range p.capabilities {
+		if cap == "lifecycle-v06x" {
+			request.Attempt = life.snapshot().Correlation
+		}
+	}
+	if _, e = p.send(v3.SessionCreate, request); e != nil {
 		return nil, e
 	}
 	p.attempt.Set(transport.InitialisingBrowser)
@@ -225,11 +257,20 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 	if f.Type != v3.SessionCreated || f.Session.Zero() || out.MaxTabs < 1 || out.MaxTabs > 8 || out.Width < 320 || out.Height < 200 {
 		return nil, v3.ErrFrame
 	}
+	if request.Attempt != "" && out.Attempt != request.Attempt {
+		return nil, v3.ErrFrame
+	}
 	p.id = f.Session
+	life.set("display_connect", func(s *BrowserStatus) { s.Browser = "ready"; s.Display = "connecting" })
 	p.attempt.Set(transport.ConnectingPixels)
-	pixels, e := c.openPeer(startup, "pixel", p.id)
+	displayCtx, stopDisplay := context.WithTimeout(startup, browserlife.DisplayConnect)
+	defer stopDisplay()
+	pixels, e := c.openPeer(displayCtx, "pixel", p.id)
 	if e != nil {
-		return nil, e
+		if startup.Err() == nil {
+			probeControl(p, life)
+		}
+		return nil, life.failure("DISPLAY_CONNECTION_FAILED", e)
 	}
 	pixels.attempt.Set(transport.ConnectingPixels)
 	stopPixelStartup := context.AfterFunc(startup, func() { pixels.conn.Close() })
@@ -239,7 +280,7 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 			if startup.Err() != nil {
 				result = startup.Err()
 			}
-			result = stageFailure(pixels.attempt, result)
+			result = life.failure("DISPLAY_CONNECTION_FAILED", stageFailure(pixels.attempt, result))
 		}
 	}()
 	if _, e = pixels.send(v3.PixelAttach, v3.Control{}); e != nil {
@@ -260,10 +301,19 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 		return nil, v3.ErrFrame
 	}
 	ctx, cancel := context.WithCancel(parent)
-	b := &Browser{report: c.Report, ID: p.id, MaxTabs: out.MaxTabs, Frames: make(chan BrowserFrame, 1), Events: make(chan BrowserEvent, 32), ctx: ctx, cancel: cancel, control: p, pixel: pixels, queue: make(chan transmit, 128), wake: make(chan struct{}, 1), pages: make(map[string]bool), pending: make(map[uint64]time.Time), width: out.Width, height: out.Height}
+	if o.FirstFrameTimeout <= 0 {
+		o.FirstFrameTimeout = browserlife.FirstFrame
+	}
+	if o.FrameIdleTimeout <= 0 {
+		o.FrameIdleTimeout = browserlife.FrameIdle
+	}
+	b := &Browser{life: life, firstTimeout: o.FirstFrameTimeout, idleTimeout: o.FrameIdleTimeout, report: c.Report, ID: p.id, MaxTabs: out.MaxTabs, Frames: make(chan BrowserFrame, 1), Events: make(chan BrowserEvent, 32), ctx: ctx, cancel: cancel, control: p, pixel: pixels, queue: make(chan transmit, 128), wake: make(chan struct{}, 1), pages: make(map[string]bool), creatingPages: make(map[string]*pendingPage), pending: make(map[uint64]time.Time), width: out.Width, height: out.Height}
 	p.conn.SetDeadline(time.Time{})
 	pixels.conn.SetDeadline(time.Time{})
 	for _, capability := range p.capabilities {
+		if capability == "navigation-v06x" {
+			b.navigationSupported = true
+		}
 		if capability == "input-v06" {
 			b.pinchSupported = true
 		}
@@ -273,6 +323,7 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 	go b.readControl()
 	go b.readPixels()
 	go func() { <-ctx.Done(); p.conn.Close(); pixels.conn.Close() }()
+	life.set("display_attached", func(s *BrowserStatus) { s.Display = "attached" })
 	ok = true
 	p.attempt.Finish(nil)
 	pixels.attempt.Finish(nil)
@@ -280,14 +331,28 @@ func (c Client) OpenBrowser(parent context.Context, o BrowserOptions) (opened *B
 	return b, nil
 }
 func (b *Browser) Close() {
-	b.once.Do(func() { b.cancel(); b.control.conn.Close(); b.pixel.conn.Close(); b.wg.Wait() })
+	b.once.Do(func() {
+		b.cancel()
+		b.control.conn.Close()
+		b.pixel.conn.Close()
+		b.wg.Wait()
+		b.life.set("client_cleanup_complete", func(s *BrowserStatus) {
+			s.Control = "closed"
+			s.Display = "closed"
+			s.Browser = "termination_requested"
+		})
+	})
 }
 func (b *Browser) Done() <-chan struct{}   { return b.ctx.Done() }
 func (b *Browser) Size() (int, int)        { b.mu.Lock(); defer b.mu.Unlock(); return b.width, b.height }
 func (b *Browser) Metrics() BrowserMetrics { b.mu.Lock(); defer b.mu.Unlock(); return b.metrics }
 func (b *Browser) fail(code string) {
+	var err error = &Error{Code: code}
+	if b.life != nil {
+		err = b.life.failure(code, err)
+	}
 	if b.report != nil {
-		b.report("browser_stream_failed", &Error{Code: code})
+		b.report("browser_stream_failed", err)
 	}
 	select {
 	case b.Events <- BrowserEvent{Type: v3.Error, Control: v3.Control{Code: code}}:
@@ -376,8 +441,19 @@ func (b *Browser) NewTab(id string) error {
 		return errors.New("TAB_LIMIT")
 	}
 	b.pages[id] = true
+	if b.creatingPages == nil {
+		b.creatingPages = make(map[string]*pendingPage)
+	}
+	b.creatingPages[id] = &pendingPage{}
 	b.mu.Unlock()
-	return b.command(v3.TabCreate, v3.Control{Tab: id})
+	if e := b.command(v3.TabCreate, v3.Control{Tab: id}); e != nil {
+		b.mu.Lock()
+		delete(b.pages, id)
+		delete(b.creatingPages, id)
+		b.mu.Unlock()
+		return e
+	}
+	return nil
 }
 func (b *Browser) Select(id string) error {
 	if e := b.NewTab(id); e != nil {
@@ -385,13 +461,22 @@ func (b *Browser) Select(id string) error {
 	}
 	b.mu.Lock()
 	b.selectedTab = id
+	pending := b.creatingPages[id]
+	if pending != nil {
+		pending.selectWanted = true
+	}
 	b.mu.Unlock()
+	b.requestFrame()
+	if pending != nil {
+		return nil
+	}
 	return b.command(v3.TabSelect, v3.Control{Tab: id})
 }
 func (b *Browser) CloseTab(id string) error {
 	b.mu.Lock()
 	exists := b.pages[id]
 	delete(b.pages, id)
+	delete(b.creatingPages, id)
 	b.mu.Unlock()
 	if !exists {
 		return nil
@@ -401,6 +486,15 @@ func (b *Browser) CloseTab(id string) error {
 func (b *Browser) Navigate(id, target string) error {
 	if e := b.Select(id); e != nil {
 		return e
+	}
+	b.mu.Lock()
+	pending := b.creatingPages[id]
+	if pending != nil {
+		pending.target = target
+	}
+	b.mu.Unlock()
+	if pending != nil {
+		return nil
 	}
 	return b.command(v3.Navigate, v3.Control{Tab: id, Target: target})
 }
@@ -497,11 +591,18 @@ func (b *Browser) write() {
 func (b *Browser) readControl() {
 	defer b.wg.Done()
 	for {
-		b.control.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		b.control.conn.SetReadDeadline(time.Now().Add(browserlife.ControlIdle))
 		f, c, e := b.control.read(false)
 		if e != nil {
 			if b.ctx.Err() == nil {
-				b.fail("CONTROL_STREAM_FAILED")
+				code := "CONTROL_STREAM_FAILED"
+				var timeout net.Error
+				if errors.Is(e, v3.ErrFrame) || errors.Is(e, v3.ErrVersion) {
+					code = "CONTROL_PROTOCOL_INVALID"
+				} else if errors.As(e, &timeout) && timeout.Timeout() {
+					code = "CONTROL_IDLE_TIMEOUT"
+				}
+				b.fail(code)
 			}
 			return
 		}
@@ -543,8 +644,36 @@ func (b *Browser) readControl() {
 			default:
 			}
 		}
+
+		failedCreation := false
+		b.mu.Lock()
+		pending := b.creatingPages[c.Tab]
+		if f.Type == v3.SessionStatus && c.State == "Ready" {
+			delete(b.creatingPages, c.Tab)
+		} else if f.Type == v3.Error && pending != nil {
+			failedCreation = true
+			delete(b.creatingPages, c.Tab)
+			delete(b.pages, c.Tab)
+		}
+		var requested pendingPage
+		if pending != nil {
+			requested = *pending
+		}
+		b.mu.Unlock()
+		if f.Type == v3.SessionStatus && c.State == "Ready" && pending != nil {
+			if requested.selectWanted {
+				if e := b.command(v3.TabSelect, v3.Control{Tab: c.Tab}); e != nil {
+					return
+				}
+			}
+			if requested.target != "" {
+				if e := b.command(v3.Navigate, v3.Control{Tab: c.Tab, Target: requested.target}); e != nil {
+					return
+				}
+			}
+		}
 		select {
-		case b.Events <- BrowserEvent{Type: f.Type, Control: c}:
+		case b.Events <- BrowserEvent{Type: f.Type, Control: c, FailedCreation: failedCreation}:
 		case <-b.ctx.Done():
 			return
 		default:
@@ -554,7 +683,7 @@ func (b *Browser) readControl() {
 		if c.Code != "" && (f.Type == v3.Error || f.Type == v3.NavigationStatus) && b.report != nil {
 			b.report("browser_remote_error", &Error{Code: c.Code})
 		}
-		if f.Type == v3.Error && (c.Code == "AUTH_FAILED" || c.Code == "SESSION_INVALID" || c.Code == "PROTOCOL_ERROR" || c.Code == "BROWSER_CRASHED" || c.Code == "PIXEL_ERROR") {
+		if f.Type == v3.Error && (c.Code == "AUTH_FAILED" || (c.Code == "SESSION_INVALID" && c.Tab == "") || c.Code == "PROTOCOL_ERROR" || c.Code == "BROWSER_CRASHED" || c.Code == "PIXEL_ERROR" || c.Code == "DISPLAY_ATTACH_TIMEOUT" || c.Code == "BROWSER_IDLE_TIMEOUT") {
 			b.cancel()
 			return
 		}
@@ -563,22 +692,65 @@ func (b *Browser) readControl() {
 func (b *Browser) readPixels() {
 	defer b.wg.Done()
 	for {
-		b.pixel.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		b.mu.Lock()
+		timeout := b.idleTimeout
+		if timeout <= 0 {
+			timeout = browserlife.FrameIdle
+		}
+		requested, first := b.frameRequested, b.firstFrame
+		if requested && !first {
+			timeout = b.firstTimeout
+			if timeout <= 0 {
+				timeout = browserlife.FirstFrame
+			}
+		}
+		b.mu.Unlock()
+		// No page is requested immediately after attachment. Start the first-frame
+		// budget when Select queues the first page, not while the user is idle.
+		if !requested {
+			b.pixel.conn.SetReadDeadline(time.Time{})
+		} else {
+			b.pixel.conn.SetReadDeadline(time.Now().Add(timeout))
+		}
 		f, _, e := b.pixel.read(true)
 		if e != nil {
 			if b.ctx.Err() == nil {
-				b.fail("PIXEL_STREAM_FAILED")
+				b.mu.Lock()
+				requested, first = b.frameRequested, b.firstFrame
+				b.mu.Unlock()
+				code := "DISPLAY_STREAM_LOST"
+				var timeout net.Error
+				if errors.As(e, &timeout) && timeout.Timeout() {
+					code = "FRAME_IDLE_TIMEOUT"
+					if !first && requested {
+						code = "FIRST_FRAME_TIMEOUT"
+					}
+				} else if errors.Is(e, io.ErrUnexpectedEOF) {
+					code = "DISPLAY_FRAME_TRUNCATED"
+				} else if errors.Is(e, v3.ErrFrame) || errors.Is(e, v3.ErrVersion) {
+					code = "DISPLAY_PROTOCOL_INVALID"
+				}
+				b.fail(code)
 			}
 			return
 		}
 		if f.Type != v3.PixelUpdate || f.Session != b.ID {
-			b.fail("PROTOCOL_ERROR")
+			b.fail("DISPLAY_PROTOCOL_INVALID")
 			return
 		}
 		start := time.Now()
 		u, img, e := pixelstream.Decode(f.Payload)
 		if e != nil {
-			b.fail("PIXEL_ERROR")
+			var diagnostic *pixelstream.Failure
+			if errors.As(e, &diagnostic) {
+				b.life.set("image_decode", func(s *BrowserStatus) {
+					s.Encoding = diagnostic.Encoding
+					s.Width = diagnostic.Width
+					s.Height = diagnostic.Height
+					s.Decoder = diagnostic.Category
+				})
+			}
+			b.fail("FRAME_DECODE_FAILED")
 			return
 		}
 		w, h := b.Size()
@@ -589,12 +761,17 @@ func (b *Browser) readPixels() {
 		if !b.acceptViewportFrame(u.Width, u.Height) {
 			continue
 		}
-		frame := BrowserFrame{Update: u, Image: img, Sequence: f.Sequence, DecodeUS: time.Since(start).Microseconds()}
+		frame := BrowserFrame{Update: u, Image: img, Sequence: f.Sequence, DecodeUS: time.Since(start).Microseconds(), ReceivedAt: start, DecodedAt: time.Now()}
 		b.mu.Lock()
+		firstDecoded := !b.firstFrame
+		b.firstFrame = true
 		b.metrics.Frames++
 		b.metrics.Bytes += uint64(len(f.Payload))
 		b.metrics.DecodeUS = frame.DecodeUS
 		b.mu.Unlock()
+		if firstDecoded {
+			b.life.set("frame_decoded", func(s *BrowserStatus) { s.Frame = "decoded"; s.Display = "streaming" })
+		}
 		select {
 		case b.Frames <- frame:
 		default:
@@ -631,3 +808,40 @@ func (b *Browser) acceptViewportFrame(w, h int) bool {
 func (b *Browser) LastTextSequence() uint64 { return b.textSequence.Load() }
 
 func (b *Browser) activeTab() string { b.mu.Lock(); defer b.mu.Unlock(); return b.selectedTab }
+
+func (b *Browser) Status() BrowserStatus { return b.life.snapshot() }
+func (b *Browser) requestFrame() {
+	b.mu.Lock()
+	if !b.frameRequested {
+		b.frameRequested = true
+		timeout := b.firstTimeout
+		if timeout <= 0 {
+			timeout = browserlife.FirstFrame
+		}
+		if b.pixel != nil {
+			b.pixel.conn.SetReadDeadline(time.Now().Add(timeout))
+		}
+		b.mu.Unlock()
+		b.life.set("first_frame", func(s *BrowserStatus) { s.Frame = "waiting" })
+		return
+	}
+	b.mu.Unlock()
+}
+
+func (b *Browser) Presented(sequence uint64, conversion, upload, submit, present int64) {
+	b.mu.Lock()
+	b.metrics.ConversionUS = conversion
+	b.metrics.UploadUS = upload
+	b.metrics.SubmitUS = submit
+	b.metrics.PresentUS = present
+	b.mu.Unlock()
+	if b.life != nil && b.life.snapshot().Frame != "presented" {
+		b.life.set("first_present", func(s *BrowserStatus) { s.Frame = "presented" })
+	}
+}
+func (b *Browser) PresentationFailed(code string) {
+	switch code {
+	case "RENDER_UPLOAD_FAILED", "RENDER_SUBMIT_FAILED", "RENDER_PRESENT_FAILED":
+		b.fail(code)
+	}
+}

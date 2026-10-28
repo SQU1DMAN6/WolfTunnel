@@ -30,6 +30,7 @@ int wolf_init(const void *data,int length) {
  if (!font) return 0;
  override_scale=0;font_size=0;metrics();SDL_StartTextInput(window);return 1;
 }
+void wolf_forget_pixels(void){if(pixels)SDL_DestroyTexture(pixels);pixels=NULL;pixels_w=0;pixels_h=0;}
 void wolf_destroy(void) {
  if(pixels)SDL_DestroyTexture(pixels);pixels=NULL;pixels_w=0;pixels_h=0;
  if(font) TTF_CloseFont(font);if(renderer) SDL_DestroyRenderer(renderer);if(window) SDL_DestroyWindow(window);
@@ -74,7 +75,7 @@ void wolf_text_sized(float x,float y,float w,const char *text,int c,float points
 }
 void wolf_text(float x,float y,float w,const char *text,int c){wolf_text_sized(x,y,w,text,c,16);}
 float wolf_text_width(const char *text){size(16);int w=0,h=0;TTF_GetStringSize(font,text,0,&w,&h);return w/scale;}
-void wolf_present(void){SDL_RenderPresent(renderer);}
+int wolf_present(void){return SDL_RenderPresent(renderer);}
 int wolf_capture(const char *path){SDL_Surface *s=SDL_RenderReadPixels(renderer,NULL);if(!s)return 0;int ok=SDL_SaveBMP(s,path);SDL_DestroySurface(s);return ok;}
 void wolf_click(float x,float y){SDL_Event e;SDL_zero(e);e.type=SDL_EVENT_MOUSE_BUTTON_DOWN;e.button.windowID=SDL_GetWindowID(window);e.button.button=SDL_BUTTON_LEFT;SDL_RenderCoordinatesToWindow(renderer,x,y,&e.button.x,&e.button.y);SDL_PushEvent(&e);}
 void wolf_input(const char *text){static char injected[8193];SDL_strlcpy(injected,text,sizeof(injected));SDL_Event e;SDL_zero(e);e.type=SDL_EVENT_TEXT_INPUT;e.text.text=injected;SDL_PushEvent(&e);}
@@ -86,7 +87,7 @@ int wolf_pixels(const void *data,int w,int h,int pitch){
  if(!pixels||pixels_w!=w||pixels_h!=h){if(pixels)SDL_DestroyTexture(pixels);pixels=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_STREAMING,w,h);pixels_w=w;pixels_h=h;if(pixels)SDL_SetTextureScaleMode(pixels,SDL_SCALEMODE_LINEAR);}
  return pixels&&SDL_UpdateTexture(pixels,NULL,data,pitch);
 }
-void wolf_viewport(float x,float y,float w,float h){if(pixels){SDL_FRect dest={x,y,w,h};SDL_RenderTexture(renderer,pixels,NULL,&dest);}}
+int wolf_viewport(float x,float y,float w,float h){if(pixels){SDL_FRect dest={x,y,w,h};return SDL_RenderTexture(renderer,pixels,NULL,&dest);}return 0;}
 void wolf_mouse(int down,int button,float x,float y){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_MOUSE_BUTTON_DOWN:SDL_EVENT_MOUSE_BUTTON_UP;e.button.windowID=SDL_GetWindowID(window);e.button.button=button;SDL_RenderCoordinatesToWindow(renderer,x,y,&e.button.x,&e.button.y);SDL_PushEvent(&e);}
 
 void wolf_key_event(int key,int down){SDL_Event e;SDL_zero(e);e.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;e.key.windowID=SDL_GetWindowID(window);e.key.key=key;e.key.scancode=SDL_GetScancodeFromKey(key,NULL);SDL_PushEvent(&e);}

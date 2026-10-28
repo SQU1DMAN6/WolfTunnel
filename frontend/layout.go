@@ -28,6 +28,13 @@ func (u *ui) addControl(c control) {
 	u.controls = append(u.controls, c)
 }
 func (u *ui) draw() {
+	if u.m.Remote == nil && !u.m.opening {
+		u.forgetPixels()
+		u.rgba = nil
+		u.textureTab = ""
+		u.textureSequence = 0
+		u.pendingPresentation = presentationSample{}
+	}
 	oldW, oldH, oldDPI := u.width, u.height, u.dpi
 	u.width, u.height, u.pixelWidth, u.pixelHeight, u.dpi = dimensions()
 	w, h := u.width, u.height
@@ -107,6 +114,9 @@ func (u *ui) draw() {
 			} else if page.Result.Status != 0 {
 				notice = fmt.Sprintf("%s · HTTP %d", page.State, page.Result.Status)
 			}
+		}
+		if status := u.m.navigationStatus(); status != "" {
+			notice = status
 		}
 		u.wrapped(20, h-78, w-40, notice, color, 1)
 	} else {
@@ -328,6 +338,8 @@ func (u *ui) settingsDraw() {
 	if u.m.Client.Config.Details {
 		text(left, y, width, "Diagnostics", accent)
 		y += 30
+		y += u.wrapped(left, y, width, fmt.Sprintf("Browser: %s · Control: %s · Display: %s · Frame: %s", u.m.BrowserState.Browser, u.m.BrowserState.Control, u.m.BrowserState.Display, u.m.BrowserState.Frame), muted, 3) + 8
+		y += u.wrapped(left, y, width, "Lifecycle: "+u.m.BrowserState.Stage+" · Failed at: "+u.m.BrowserState.FailureStage+" · Cause: "+u.m.BrowserState.CauseCode+" · Correlation: "+u.m.BrowserState.Correlation, muted, 2) + 8
 		y += u.wrapped(left, y, width, fmt.Sprintf("Stage: %s · Channel: %s · Retry: %d", u.m.Network.State, u.m.Network.Channel, u.m.Network.Retry), muted, 2) + 8
 		for _, line := range []string{"Identity: " + u.m.Client.Config.Fingerprint, "Discovered (unverified): " + u.m.Discovered, "Client ID: " + u.m.Client.Config.ClientID, "Last error: " + u.m.ConnectionError, "Client log: " + u.clientLogPath(), fmt.Sprintf("Window: %d × %d · Pixels: %d × %d · Scale: %.2f", w, h, u.pixelWidth, u.pixelHeight, u.dpi)} {
 			y += u.wrapped(left, y, width, line, muted, 2) + 8
@@ -366,7 +378,7 @@ func (u *ui) menuDraw() {
 func (u *ui) helpDraw() {
 	w, h := u.width, u.height
 	rect(16, 142, w-32, h-270, 0x25374a)
-	headline(32, 160, w-64, "WolfTunnel v0.6", accent)
+	headline(32, 160, w-64, "WolfTunnel v0.6.x", accent)
 	value := "Webpages run on your trusted node. This client displays pixels and sends browser input over verified TLS. Sites see the node IP; logins and fingerprinting can still identify you.\n\nThat's the boring stuff. WolfTunnel is THE go-to private browser part of the FtR Project, written by Quan Thai.\nHope you enjoy. Happy browsing."
 	if u.help == "docs" {
 		value = strings.TrimSpace(guide)

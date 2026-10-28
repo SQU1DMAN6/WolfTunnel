@@ -163,3 +163,40 @@ func TestPartialReadWriteAndGestureBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestV06xCapabilitiesCorrelationAndNavigationSchemas(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	id := NewID()
+	binding := make([]byte, 32)
+	proof := Sign(key, binding, id, Control{ClientID: string(bytes.Repeat([]byte{'a'}, 64)), Role: "control", Capabilities: []string{"browser-start-diagnostics", "lifecycle-v06x", "navigation-v06x"}})
+	if _, e := Decode(Frame{Type: Authenticate, Payload: Encode(proof)}); e != nil {
+		t.Fatal(e)
+	}
+	if !ed25519.Verify(pub, Proof(binding, id, proof), proof.Signature) {
+		t.Fatal("capability proof invalid")
+	}
+	changed := proof
+	changed.Capabilities = []string{"browser-start-diagnostics"}
+	if ed25519.Verify(pub, Proof(binding, id, changed), proof.Signature) {
+		t.Fatal("capability removal not bound to signature")
+	}
+	for _, caps := range [][]string{{"navigation-v06x", "navigation-v06x"}, {"unknown"}} {
+		bad := proof
+		bad.Capabilities = caps
+		if _, e := Decode(Frame{Type: Authenticate, Payload: Encode(bad)}); e == nil {
+			t.Fatal("invalid capability accepted")
+		}
+	}
+	if _, e := Decode(Frame{Type: SessionCreate, Payload: Encode(Control{Attempt: "bad-id"})}); e == nil {
+		t.Fatal("invalid correlation")
+	}
+	for _, typ := range []byte{LinkStatus, NewTabRequest} {
+		state := "Hover"
+		if typ == NewTabRequest {
+			state = "NewTabRequested"
+		}
+		if _, e := Decode(Frame{Type: typ, Payload: Encode(Control{Tab: id.String(), Target: "https://public.test/", State: state})}); e != nil {
+			t.Fatal(e)
+		}
+	}
+}

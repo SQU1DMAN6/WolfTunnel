@@ -60,4 +60,31 @@ bypass, revocation, cross-client attachment, strict framing, private egress,
 stream interruption, bounded queues and real browser teardown. These tests do
 not constitute a new sandbox penetration audit. Physical trackpads/IME,
 ARM64 runtime and live managed networks need separate testing. See the
-[implementation report](../doc/IMPLEMENTATION-v0_6-2026_10_27.md).
+[implementation report](../doc/IMPLEMENTATION-v0_6_x-2026_10_28.md).
+
+## v0.6.x additions
+
+Correlation IDs and signed optional capabilities add diagnostics, not authority.
+The control and display connections still authenticate independently against the
+same pin, key, owner and session. No readable relay, inspection bypass or proxy
+fallback was added. The local protocol-aware simulator runs inside an explicitly
+developer-controlled TLS endpoint holding its own test identity. It does not
+show that a network intermediary can read intact pinned TLS. Replacement-cert
+inspection is tested separately and rejected.
+
+Link hover and Ctrl+click use fixed hit-test/DOM methods plus a fixed function in
+an isolated browser world. Clients cannot supply script source or generic CDP
+commands. Returned targets remain untrusted data and are validated again through
+the existing URL/egress boundary. Browser-created popup targets remain closed;
+validated user-gesture URLs use the regular bounded tab path. Private, credentialed
+and unsupported URLs are rejected. Display text is clipped, never markup.
+Same-session tabs intentionally share that disposable browser context; different
+clients/sessions remain isolated. Unprompted windows are reported as blocked.
+
+The conversion surface belongs exclusively to the SDL thread; received images
+borrowed on the RGBA fast path remain immutable. Reuse does not raise frame caps
+or retain unbounded buffers. SDL failures are explicit. Operational logs omit
+hover/navigation URLs and page text; explicit screenshots naturally contain
+controlled fixture content. Pending work and failed allocations are bounded and
+cleaned up. Remote host process termination is assessed at the node rather than
+inferred from a client closing its own sockets.

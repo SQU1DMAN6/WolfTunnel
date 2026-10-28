@@ -13,8 +13,9 @@ import (
 
 func (c Client) attempt(channel string) *transport.Attempt {
 	return transport.NewAttempt(channel, c.Config.Transport, func(e transport.Event) {
+		e.Correlation = c.correlation
 		if c.Log != nil {
-			c.Log.Log(audit.Entry{Component: "client", Event: "connection_state", ID: e.Attempt, Status: string(e.State), Stage: string(e.Stage), Code: e.Code, Transport: e.Transport, Channel: e.Channel, Retry: e.Retry, DurationMS: e.DurationMS})
+			c.Log.Log(audit.Entry{Component: "client", Event: "connection_state", Correlation: c.correlation, ID: e.Attempt, Status: string(e.State), Stage: string(e.Stage), Code: e.Code, Transport: e.Transport, Channel: e.Channel, Retry: e.Retry, DurationMS: e.DurationMS})
 		}
 		if c.Observer != nil {
 			c.Observer(e)
